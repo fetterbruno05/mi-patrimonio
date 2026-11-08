@@ -21,7 +21,27 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect } = React;
+    const { useState, useEffect, Component } = React;
+
+    // EL ESCUDO ANTI-CRASHEOS FALTANTE
+    class ErrorBoundary extends Component {
+      constructor(props) { super(props); this.state = { hasError: false, errorInfo: null }; }
+      static getDerivedStateFromError(error) { return { hasError: true, errorInfo: error.message }; }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="flex h-screen items-center justify-center p-4">
+              <div className="bg-rose-950 border border-rose-500 p-6 rounded-xl text-center max-w-sm">
+                <h1 className="text-white font-bold mb-2">Error Visual</h1>
+                <p className="text-rose-300 text-xs mb-4">{this.state.errorInfo}</p>
+                <button onClick={() => window.location.reload()} className="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-lg font-bold">Recargar App</button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
 
     // ==========================================
     // 1. CONEXIÓN A TU NUEVA BASE DE DATOS
