@@ -23,7 +23,7 @@
   <script type="text/babel">
     const { useState, useEffect, Component } = React;
 
-    // EL ESCUDO ANTI-CRASHEOS FALTANTE
+    // EL ESCUDO ANTI-CRASHEOS
     class ErrorBoundary extends Component {
       constructor(props) { super(props); this.state = { hasError: false, errorInfo: null }; }
       static getDerivedStateFromError(error) { return { hasError: true, errorInfo: error.message }; }
@@ -49,9 +49,12 @@
     const SUPABASE_URL = "https://nbluvlbsuvmkcaflmjei.supabase.co";
     const SUPABASE_KEY = "sb_publishable_IuVcRy48mLa5P02gRC7B_Q_tI3C6Wuk";
     
-    let supabase = null;
+    // Cambié el nombre de esta variable a supaClient para evitar conflictos con Vercel
+    let supaClient = null;
     try {
-      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      if (window.supabase) {
+        supaClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      }
     } catch (err) { console.error("Error iniciando Supabase:", err); }
 
     // Plantilla base para cuando la base de datos está vacía
@@ -86,9 +89,15 @@
       // ==========================================
       useEffect(() => {
         async function fetchNube() {
-          if (!supabase) return;
+          // Si el cliente falló, cortamos igual la pantalla de carga para que no se trabe
+          if (!supaClient) {
+            console.warn("No se pudo conectar a la base de datos externa.");
+            setIsLoaded(true);
+            return;
+          }
+
           try {
-            const { data, error } = await supabase.from('iconnecture_data').select('payload').eq('id', 1).single();
+            const { data, error } = await supaClient.from('iconnecture_data').select('payload').eq('id', 1).single();
             if (error) throw error;
             
             if (data && data.payload) {
@@ -100,8 +109,9 @@
               });
             }
           } catch (err) {
-            console.error("Base de datos limpia, iniciando de cero.");
+            console.error("Base de datos limpia, iniciando de cero.", err);
           }
+          // AHORA ESTO SIEMPRE SE EJECUTA
           setIsLoaded(true);
         }
         fetchNube();
@@ -112,11 +122,11 @@
       // ==========================================
       const guardarEnNube = async (nuevoEstadoDb) => {
         setDb(nuevoEstadoDb); // Actualiza la pantalla rápido
-        if (supabase) {
-          const { error } = await supabase.from('iconnecture_data').update({ payload: nuevoEstadoDb }).eq('id', 1);
+        if (supaClient) {
+          const { error } = await supaClient.from('iconnecture_data').update({ payload: nuevoEstadoDb }).eq('id', 1);
           if (error) {
             console.error("Error al subir a la nube:", error);
-            alert("Error al guardar en la nube.");
+            alert("Atención: No se pudo guardar en la nube. Revisá tu conexión.");
           }
         }
       };
