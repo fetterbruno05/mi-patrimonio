@@ -42,6 +42,9 @@
       }
     }
 
+    // ==========================================
+    // 1. CONEXIÓN A BASE DE DATOS
+    // ==========================================
     const SUPABASE_URL = "https://nbluvlbsuvmkcaflmjei.supabase.co";
     const SUPABASE_KEY = "sb_publishable_IuVcRy48mLa5P02gRC7B_Q_tI3C6Wuk";
     
@@ -69,12 +72,13 @@
       const [db, setDb] = useState(DB_TEMPLATE);
       const [vista, setVista] = useState('patrimonio'); 
 
+      // ESTADOS GLOBALES DE LA APP
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      // ESTADOS DE FORMULARIOS
+      // ESTADOS DE FORMULARIOS PATRIMONIALES Y VENTAS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
@@ -89,9 +93,9 @@
       // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
-      const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '' }); // NUEVO: Estado para pagos parciales de clientes
+      
+      const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '' });
 
       // ESTADOS UI DE MODALES
       const [editandoDolar, setEditandoDolar] = useState(false);
@@ -625,7 +629,7 @@
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
               equipoOriginal: equipo, montoCobrado: montoFin, monedaCobro: nuevaReparacionFinalizada.monedaCobro,
-              montoAdeudadoRestante: montoFin, // NUEVO: Inicialmente se debe todo el arreglo
+              montoAdeudadoRestante: montoFin, // INICIALMENTE DEBE TODO
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar'
           };
           
@@ -651,30 +655,29 @@
               dbUpdates.deudasCobrar = deudasCobrarActualizadas;
               log = generarLog('Finalizó Reparación Gremio', `Finalizó ${equipo.modelo} de ${equipo.gremio}. Se sumaron ${montoFin} ${nuevaReparacionFinalizada.monedaCobro} a sus Cuentas por Cobrar.`, registroFin);
           } else {
-              log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}. Quedó pendiente de pago por ${montoFin} ${nuevaReparacionFinalizada.monedaCobro}.`, registroFin);
+              log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}. Quedó pendiente de cobro por ${montoFin} ${nuevaReparacionFinalizada.monedaCobro}.`, registroFin);
           }
 
           guardarEnNube({ ...db, ...dbUpdates, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
       };
 
-      // MAGIA: COBRO PARCIAL (MULTIBILLETERA Y MULTIMONEDA)
+      // MAGIA 2: COBRO PARCIAL (MULTIBILLETERA Y MULTIMONEDA)
       const cobrarReparacionClienteParcial = (e, itemReparacion) => {
           e.preventDefault();
           if (!panelCobroReparacion.walletId || !panelCobroReparacion.montoCobro) return alert('Elegí a qué billetera entra la plata y cuánto te dio.');
+          
           const montoQueDaElCliente = parseFloat(panelCobroReparacion.montoCobro);
           if (montoQueDaElCliente <= 0) return alert('Monto inválido.');
 
-          // 1. Mete la plata a la billetera (respetando la moneda del cobro, no del original)
-          // Asumimos por ahora que te paga en la misma moneda en la que le finalizaste la reparación para no enroscar
+          // Asumimos que el cliente te entrega la plata en la misma moneda en la que cerraste el presupuesto para no enroscar
           const monedaDePago = itemReparacion.monedaCobro; 
           const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, montoQueDaElCliente, monedaDePago, db.activos);
           
-          // 2. Calcula cuánto falta
           const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? itemReparacion.montoAdeudadoRestante : itemReparacion.montoCobrado;
           const nuevoRestante = parseFloat(adeudadoActual) - montoQueDaElCliente;
           
-          if (nuevoRestante < -0.05) return alert('El cliente te está dando más plata de la que debe en esta reparación.');
+          if (nuevoRestante < -0.05) return alert('El cliente te está entregando más plata de la que te debe por esta reparación.');
 
           const reparacionesFinActualizadas = (db.reparacionesFin || []).map(r => {
               if (r.id === itemReparacion.id) {
@@ -685,7 +688,7 @@
           });
 
           const walletUsada = activosConCobro.find(w => w.id === parseInt(panelCobroReparacion.walletId))?.nombre;
-          const estadoLog = nuevoRestante <= 0.05 ? 'Canceló el total.' : `Aún debe ${nuevoRestante} ${monedaDePago}.`;
+          const estadoLog = nuevoRestante <= 0.05 ? 'Canceló el total.' : `Aún te debe ${nuevoRestante.toFixed(2)} ${monedaDePago}.`;
           const log = generarLog('Cobró Reparación Cliente', `Recibió un pago de ${montoQueDaElCliente} ${monedaDePago} por el ${itemReparacion.equipoOriginal.modelo}. ${estadoLog} Entró a: ${walletUsada}.`);
 
           guardarEnNube({ ...db, activos: activosConCobro, reparacionesFin: reparacionesFinActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -693,7 +696,7 @@
       };
 
       const eliminarReparacionHistorial = (itemRep) => {
-          if (window.confirm("¿Seguro querés eliminar este registro histórico? OJO: Si ya lo cobraste, esto NO restará la plata de tus cuentas, solo borrará el papel virtual.")) {
+          if (window.confirm("¿Seguro querés eliminar este registro histórico? OJO: Si ya le habías cobrado algo, esto NO restará la plata de tus cuentas, solo borrará el papel virtual.")) {
               const log = generarLog('Eliminó Historial de Reparación', `Borró el historial del ${itemRep.equipoOriginal.modelo}.`);
               guardarEnNube({ ...db, reparacionesFin: db.reparacionesFin.filter(v => v.id !== itemRep.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           }
@@ -712,9 +715,9 @@
       const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
       const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
       
-      // Ganancia de Reparaciones ahora solo suma lo que realmente cobraste (Monto original - Monto que te deben todavía)
+      // La Ganancia Real de reparaciones suma SOLO la plata que ya te entregaron en mano. (Cobro Total - Lo que te deben todavía)
       const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
-          const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0; // Si es viejo y no tiene el campo, asumimos 0 de deuda
+          const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0; 
           const cobradoReal = parseFloat(item.montoCobrado) - adeudado;
           const enUSD = item.monedaCobro === 'USD' ? cobradoReal : cobradoReal / db.cotizacionDolar;
           return acc + (enUSD > 0 ? enUSD : 0);
@@ -787,11 +790,14 @@
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setVista('patrimonio')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'patrimonio' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-scale-balanced w-5 text-center"></i> Patrimonio Real</button>
               <button onClick={() => setVista('gastos')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'gastos' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-chart-pie w-5 text-center"></i> Gastos y Análisis</button>
+              
               <button onClick={() => setVista('ventas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'ventas' ? 'bg-emerald-500 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-cash-register w-5 text-center"></i> Ventas de Equipos</button>
               <button onClick={() => setVista('taller')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'taller' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-microchip w-5 text-center"></i> Taller Ingresos</button>
               <button onClick={() => setVista('reparacionesFin')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'reparacionesFin' ? 'bg-cyan-700 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-clipboard-check w-5 text-center"></i> Reparaciones Histórico</button>
+              
               <button onClick={() => setVista('cobrar')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'cobrar' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-hand-holding-dollar w-5 text-center"></i> Cuentas a Cobrar</button>
               <button onClick={() => setVista('deudas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'deudas' ? 'bg-rose-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-handshake w-5 text-center"></i> Deudas a Otros</button>
+              
               <button onClick={() => setVista('stock')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'stock' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-boxes-stacked w-5 text-center"></i> Stock Repuestos</button>
               <button onClick={() => setVista('actividad')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-shield-halved w-5 text-center text-indigo-400"></i> Auditoría (Logs)</button>
             </nav>
@@ -917,7 +923,7 @@
                             {item.nombre} 
                             {(!item.tipo || item.tipo === 'billetera') ? <i className="fa-solid fa-money-bill-1-wave text-xs text-emerald-400 bg-emerald-950 px-2 py-1 rounded"></i> : <i className="fa-solid fa-cube text-xs text-amber-400 bg-amber-950 px-2 py-1 rounded"></i>}
                           </p>
-                          {!modoPrivado && <p className="text-xs text-slate-500 font-mono mt-1">Cargado: {item.monto} {item.moneda}</p>}
+                          {!modoPrivado && <p className="text-xs text-slate-500 font-mono mt-1">Cargado en moneda base: {item.monto} {item.moneda}</p>}
                         </div>
                         <div className="w-full md:w-auto flex items-center justify-between gap-4">
                           <span className="font-mono font-black text-blue-400 text-xl">{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
@@ -1250,7 +1256,7 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS (CON AUTOCOMPLETADO LIBRE Y MULTIMONEDA EN VIVO) */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1273,6 +1279,7 @@
                                 return;
                             }
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
+                            // Autocompleta pero deja las cajas libres para edición directa
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
                             } else {
@@ -1336,14 +1343,15 @@
                                 <span className="font-mono font-black text-cyan-400 text-2xl">{formatDinero(convertirParaMostrar(item.montoCobrado, item.monedaCobro))}</span>
                               </div>
 
+                              {/* PAGO PARCIAL DEL CLIENTE */}
                               {esPendiente && panelCobroReparacion.idReparacion !== item.id && (
-                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Cobrar (Abonar)</button>
+                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '', montoCobro: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Abonar / Cobrar</button>
                               )}
 
                               {panelCobroReparacion.idReparacion === item.id && (
                                   <div className="bg-slate-900 p-3 rounded-xl border border-cyan-500/50 flex flex-col gap-2 fade-in w-full">
-                                    <input type="number" step="any" placeholder="Monto entregado" value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white font-mono" />
-                                    <select value={panelCobroReparacion.walletId} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white">
+                                    <input type="number" step="any" placeholder={`Entregó en ${item.monedaCobro}`} value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500" />
+                                    <select value={panelCobroReparacion.walletId} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-cyan-500">
                                       <option value="">¿A qué billetera entró?</option>
                                       {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                                     </select>
