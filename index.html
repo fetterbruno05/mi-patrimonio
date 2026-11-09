@@ -80,9 +80,7 @@
 
       // ESTADOS DE FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
-      // NUEVO: ESTADO DE TRANSFERENCIA (MOVIMIENTO INTERNO)
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
-
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
@@ -105,6 +103,7 @@
       const [editandoDeudaCobrar, setEditandoDeudaCobrar] = useState(null); 
       const [editandoStock, setEditandoStock] = useState(null);
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
+      
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       // ESTADOS DE AUDITORÍA
@@ -204,6 +203,23 @@
       };
 
       // ==========================================
+      // FUNCIONES DE LIMPIEZA RECUPERADAS
+      // ==========================================
+      const limpiarHistoriaConceptos = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
+          guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      const limpiarHistoriaStock = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
+          guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      // ==========================================
       // ASISTENTE INTELIGENTE
       // ==========================================
       useEffect(() => { if(chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [chatAsistente, vista]);
@@ -252,12 +268,16 @@
         const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
         if (idx === -1) return { success: false, msg: 'Billetera no encontrada' };
+        
         const wallet = activosClon[idx];
         let montoARestar = parseFloat(montoGasto);
         if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
         if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
         
-        if (parseFloat(wallet.monto) < montoARestar) return { success: false, msg: `Saldo insuficiente en ${wallet.nombre}. Tenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${montoARestar.toFixed(2)} ${wallet.moneda}.` };
+        if (parseFloat(wallet.monto) < montoARestar) {
+            return { success: false, msg: `Saldo insuficiente en ${wallet.nombre}. Tenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${montoARestar.toFixed(2)} ${wallet.moneda}.` };
+        }
+        
         activosClon[idx].monto = (parseFloat(wallet.monto) - montoARestar).toFixed(2);
         return { success: true, activosActualizados: activosClon };
       };
@@ -266,18 +286,19 @@
         const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
         if (idx === -1) return activosClon; 
+        
         const wallet = activosClon[idx];
         let montoASumar = parseFloat(montoAReembolsar);
         if (monedaReembolso === 'ARS' && wallet.moneda === 'USD') montoASumar = montoASumar / db.cotizacionDolar;
         if (monedaReembolso === 'USD' && wallet.moneda === 'ARS') montoASumar = montoASumar * db.cotizacionDolar;
+        
         activosClon[idx].monto = (parseFloat(wallet.monto) + montoASumar).toFixed(2);
         return activosClon;
       };
 
       // ==========================================
-      // HANDLERS FINANCIEROS (PATRIMONIO Y GASTOS)
+      // HANDLERS FINANCIEROS
       // ==========================================
-      
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre.trim(), monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
@@ -286,29 +307,24 @@
         setNuevoActivo({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       };
 
-      // NUEVO: TRANSFERENCIA INTERNA
       const procesarTransferenciaInterna = (e) => {
           e.preventDefault();
           if (nuevaTransferencia.origenId === nuevaTransferencia.destinoId) return alert('La billetera de origen no puede ser igual a la de destino.');
           const montoTransferir = parseFloat(nuevaTransferencia.monto);
           if (montoTransferir <= 0) return alert('Ingresá un monto válido para transferir.');
 
-          // 1. Intentamos descontar del Origen
           const operacionDescuento = procesarDescuentoSeguro(nuevaTransferencia.origenId, montoTransferir, nuevaTransferencia.moneda, db.activos);
           if (!operacionDescuento.success) return alert(operacionDescuento.msg);
 
-          // 2. Le sumamos ese dinero descontado al Destino (procesarReembolso suma plata)
           const activosPostTransferencia = procesarReembolsoWallet(nuevaTransferencia.destinoId, montoTransferir, nuevaTransferencia.moneda, operacionDescuento.activosActualizados);
 
           const nombreOrigen = db.activos.find(a => a.id === parseInt(nuevaTransferencia.origenId))?.nombre;
           const nombreDestino = db.activos.find(a => a.id === parseInt(nuevaTransferencia.destinoId))?.nombre;
           
           const log = generarLog('Movimiento Interno', `Transfirió ${montoTransferir} ${nuevaTransferencia.moneda} de "${nombreOrigen}" hacia "${nombreDestino}".`);
-          
           guardarEnNube({ ...db, activos: activosPostTransferencia, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaTransferencia({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       };
-
 
       const agregarGastoPuntual = (e) => {
         e.preventDefault();
@@ -381,7 +397,6 @@
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
-      // --- DEUDAS (HACIA OTROS) CON MOTIVO ---
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
@@ -422,7 +437,6 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
       };
 
-      // --- DEUDAS HACIA MÍ (COBRAR) CON MOTIVO ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -444,6 +458,7 @@
           deudasCobrarActualizadas.unshift(item);
           log = generarLog('Creó Cuenta a Cobrar', `Prestó ${item.monto} ${item.moneda} a "${item.deudor}". Motivo: ${item.motivo}`, item);
         }
+
         guardarEnNube({ ...db, activos: operacion.activosActualizados, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
       };
@@ -474,7 +489,6 @@
         }
       };
 
-      // --- STOCK ---
       const agregarStock = (e) => {
         e.preventDefault();
         const conceptoTrim = nuevoStock.concepto.trim();
@@ -508,7 +522,6 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
-      // --- VENTAS ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
@@ -738,7 +751,7 @@
                   </div>
                 </div>
 
-                {/* TRANSFERENCIAS (NUEVO) */}
+                {/* TRANSFERENCIAS */}
                 <div className="bg-gradient-to-r from-slate-900 to-indigo-950/20 border border-indigo-500/20 rounded-3xl p-6 shadow-xl max-w-4xl mx-auto">
                   <div className="border-b border-indigo-500/20 pb-3 mb-4">
                     <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-arrow-right-arrow-left text-indigo-400 mr-2"></i>Movimiento Interno</h3>
@@ -775,7 +788,6 @@
                   </form>
                 </div>
 
-                {/* CREACIÓN DE ACTIVOS */}
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl max-w-4xl mx-auto">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-wallet text-blue-400 mr-2"></i>Gestión de Cuentas y Activos</h3>
@@ -1059,7 +1071,7 @@
               </div>
             )}
 
-            {/* VISTA 4: DEUDAS A OTROS (Con Motivo) */}
+            {/* VISTA 4: DEUDAS A OTROS */}
             {vista === 'deudas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1137,7 +1149,7 @@
               </div>
             )}
 
-            {/* VISTA 5: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO */}
+            {/* VISTA 5: DEUDAS HACIA MÍ (COBRAR) */}
             {vista === 'cobrar' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
