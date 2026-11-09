@@ -21,7 +21,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo, Component } = React;
+    const { useState, useEffect, useMemo, Component, useRef } = React;
 
     class ErrorBoundary extends Component {
       constructor(props) { super(props); this.state = { hasError: false, errorInfo: null }; }
@@ -90,6 +90,18 @@
       
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
+      // ESTADOS DE AUDITORÍA (FILTROS Y ASISTENTE)
+      const [filtroUsuario, setFiltroUsuario] = useState('');
+      const [filtroDesde, setFiltroDesde] = useState('');
+      const [filtroHasta, setFiltroHasta] = useState('');
+      
+      const [consultaAsistente, setConsultaAsistente] = useState('');
+      const [chatAsistente, setChatAsistente] = useState([{ 
+          emisor: 'bot', 
+          texto: '¡Hola! Soy tu asistente de auditoría. Preguntame por ej: "qué gastos agregué ayer", o "movimientos de stock de hoy".' 
+      }]);
+      const chatEndRef = useRef(null);
+
       // ==========================================
       // LÓGICA DE AUDITORÍA (LOGS)
       // ==========================================
@@ -105,21 +117,11 @@
       };
 
       // AUTOCOMPLETADO
-      const opcionesConcepto = useMemo(() => {
-        return [...new Set(db.historiaConceptos || [])];
-      }, [db.historiaConceptos]);
+      const opcionesConcepto = useMemo(() => { return [...new Set(db.historiaConceptos || [])]; }, [db.historiaConceptos]);
+      const opcionesStock = useMemo(() => { return [...new Set(db.historiaStock || [])]; }, [db.historiaStock]);
+      const billeterasDisponibles = useMemo(() => { return (db.activos || []).filter(a => a.tipo !== 'activo'); }, [db.activos]);
 
-      const opcionesStock = useMemo(() => {
-        return [...new Set(db.historiaStock || [])];
-      }, [db.historiaStock]);
-
-      const billeterasDisponibles = useMemo(() => {
-        return (db.activos || []).filter(a => a.tipo !== 'activo');
-      }, [db.activos]);
-
-      // ==========================================
       // LECTURA Y ESCRITURA NUBE
-      // ==========================================
       useEffect(() => {
         async function fetchNube() {
           if (!supaClient) { setIsLoaded(true); return; }
@@ -163,10 +165,7 @@
         const val = parseFloat(monto) || 0;
         return moneda === 'USD' ? val : val / db.cotizacionDolar;
       };
-
-      const formatDinero = (montoUSD) => {
-        return `$ ${parseFloat(montoUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
-      };
+      const formatDinero = (montoUSD) => { return `$ ${parseFloat(montoUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`; };
 
       const limpiarHistoriaConceptos = () => {
         if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
@@ -183,6 +182,73 @@
       };
 
       // ==========================================
+      // MOTOR DEL ASISTENTE INTELIGENTE
+      // ==========================================
+      useEffect(() => { if(chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [chatAsistente, vista]);
+
+      const procesarConsultaAsistente = (e) => {
+        e.preventDefault();
+        const textoUser = consultaAsistente.trim();
+        if(!textoUser) return;
+        
+        // Agrega mensaje del usuario
+        const nuevoChat = [...chatAsistente, { emisor: 'user', texto: textoUser }];
+        setChatAsistente(nuevoChat);
+        setConsultaAsistente('');
+
+        // Lógica heurística (Analizador de texto simple)
+        const lower = textoUser.toLowerCase();
+        let logsMatch = [...(db.actividad || [])];
+
+        const hoy = new Date();
+        const ayer = new Date();
+        ayer.setDate(hoy.getDate() - 1);
+
+        // Filtro Tiempo
+        if (lower.includes('hoy')) {
+            logsMatch = logsMatch.filter(l => new Date(l.fecha).toLocaleDateString() === hoy.toLocaleDateString());
+        } else if (lower.includes('ayer')) {
+            logsMatch = logsMatch.filter(l => new Date(l.fecha).toLocaleDateString() === ayer.toLocaleDateString());
+        }
+
+        // Filtro Entidad
+        let buscoAlgo = false;
+        if (lower.includes('gasto') || lower.includes('gastos')) {
+            logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('gasto'));
+            buscoAlgo = true;
+        } else if (lower.includes('deuda') || lower.includes('deudas')) {
+            logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('deuda'));
+            buscoAlgo = true;
+        } else if (lower.includes('stock') || lower.includes('repuesto') || lower.includes('bateria') || lower.includes('batería')) {
+            logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('stock') || l.accion.toLowerCase().includes('repuesto'));
+            buscoAlgo = true;
+        } else if (lower.includes('activo') || lower.includes('billetera') || lower.includes('plata')) {
+            logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('billetera') || l.accion.toLowerCase().includes('activo') || l.accion.toLowerCase().includes('pago'));
+            buscoAlgo = true;
+        }
+
+        // Filtro Usuario
+        if (lower.includes('bruno')) {
+            logsMatch = logsMatch.filter(l => l.usuario.toLowerCase() === 'bruno');
+        }
+
+        // Respuesta
+        setTimeout(() => {
+            let respuesta = '';
+            if (logsMatch.length === 0) {
+                respuesta = "Revisé los registros y no encontré ningún movimiento que coincida con lo que me pedís.";
+            } else {
+                let limite = 5;
+                const ultimos = logsMatch.slice(0, limite);
+                respuesta = `Encontré ${logsMatch.length} movimientos relacionados a eso. Acá tenés los más recientes:\n\n` + 
+                            ultimos.map(l => `• ${l.detalle}`).join('\n\n');
+                if(logsMatch.length > limite) respuesta += `\n\n*(Y ${logsMatch.length - limite} movimientos más que podés ver abajo en la tabla)*`;
+            }
+            setChatAsistente(prev => [...prev, { emisor: 'bot', texto: respuesta }]);
+        }, 500); // Pequeña demora para simular que "piensa"
+      };
+
+      // ==========================================
       // REEMBOLSOS Y DESCUENTOS SEGUROS
       // ==========================================
       const procesarDescuentoSeguro = (walletId, montoGasto, monedaGasto, activosActuales) => {
@@ -192,7 +258,6 @@
         
         const wallet = activosClon[idx];
         let montoARestar = parseFloat(montoGasto);
-        
         if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
         if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
         
@@ -208,21 +273,17 @@
         const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
         if (idx === -1) return activosClon; 
-        
         const wallet = activosClon[idx];
         let montoASumar = parseFloat(montoAReembolsar);
-        
         if (monedaReembolso === 'ARS' && wallet.moneda === 'USD') montoASumar = montoASumar / db.cotizacionDolar;
         if (monedaReembolso === 'USD' && wallet.moneda === 'ARS') montoASumar = montoASumar * db.cotizacionDolar;
-        
         activosClon[idx].monto = (parseFloat(wallet.monto) + montoASumar).toFixed(2);
         return activosClon;
       };
 
       // ==========================================
-      // HANDLERS (CON REGISTRO DE AUDITORÍA)
+      // HANDLERS FINANCIEROS (Y AUDITORÍA)
       // ==========================================
-      
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre.trim(), monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
@@ -233,12 +294,9 @@
 
       const agregarGastoPuntual = (e) => {
         e.preventDefault();
-        if (!nuevoGastoPuntual.walletId) return alert('Por favor, seleccioná de qué billetera salió el dinero.');
-        if (!nuevoGastoPuntual.concepto) return alert('Ingresá el concepto del gasto.');
-        if (billeterasDisponibles.length === 0) return alert('Primero tenés que crear una Billetera.');
-
+        if (!nuevoGastoPuntual.walletId || !nuevoGastoPuntual.concepto) return alert('Completá los datos.');
         const operacion = procesarDescuentoSeguro(nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda, db.activos);
-        if (!operacion.success) { return alert(operacion.msg); }
+        if (!operacion.success) return alert(operacion.msg); 
         
         const walletUsada = db.activos.find(w => w.id === parseInt(nuevoGastoPuntual.walletId));
         const conceptoTrim = nuevoGastoPuntual.concepto.trim();
@@ -269,16 +327,12 @@
         if (!operacionNuevoDescuento.success) { return alert(operacionNuevoDescuento.msg + " (El gasto original no se modificó)."); }
 
         const nombreWalletNueva = operacionNuevoDescuento.activosActualizados.find(w => w.id === parseInt(editandoGastoPuntual.walletIdOriginal))?.nombre;
-        
         const gastosPuntualesActualizados = db.gastosPuntuales.map(g => {
-            if (g.id === editandoGastoPuntual.id) {
-                return { ...g, concepto: editandoGastoPuntual.concepto, monto: parseFloat(editandoGastoPuntual.monto), moneda: editandoGastoPuntual.moneda, walletIdOriginal: parseInt(editandoGastoPuntual.walletIdOriginal), pagadoCon: nombreWalletNueva };
-            }
+            if (g.id === editandoGastoPuntual.id) return { ...g, concepto: editandoGastoPuntual.concepto, monto: parseFloat(editandoGastoPuntual.monto), moneda: editandoGastoPuntual.moneda, walletIdOriginal: parseInt(editandoGastoPuntual.walletIdOriginal), pagadoCon: nombreWalletNueva };
             return g;
         });
 
         const log = generarLog('Editó Gasto Suelto', `Editó gasto de "${gastoOriginal.concepto}" a "${editandoGastoPuntual.concepto}". Modificó monto de ${gastoOriginal.monto} a ${editandoGastoPuntual.monto}.`, { original: gastoOriginal, nuevo: editandoGastoPuntual });
-
         guardarEnNube({ ...db, activos: operacionNuevoDescuento.activosActualizados, gastosPuntuales: gastosPuntualesActualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setEditandoGastoPuntual(null);
       };
@@ -297,12 +351,10 @@
       const procesarPagoFijo = (itemFijo) => {
         if (!pagoActivo.walletId) return alert('Elegí una billetera para descontar el pago.');
         const operacion = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda, db.activos);
-        if (!operacion.success) { return alert(operacion.msg); }
+        if (!operacion.success) return alert(operacion.msg); 
         
         const gastosFijosActualizados = db.gastosFijos.map(g => {
-          if (g.id === itemFijo.id) {
-            return { ...g, cuotasPagadas: g.tipo === 'cuotas' ? g.cuotasPagadas + 1 : g.cuotasPagadas, ultimoPago: new Date().toLocaleDateString() };
-          }
+          if (g.id === itemFijo.id) return { ...g, cuotasPagadas: g.tipo === 'cuotas' ? g.cuotasPagadas + 1 : g.cuotasPagadas, ultimoPago: new Date().toLocaleDateString() };
           return g;
         });
 
@@ -328,28 +380,22 @@
           deudasActualizadas.unshift(item);
           log = generarLog('Creó Nueva Deuda', `Registró nueva deuda con "${item.acreedor}" por ${item.monto} ${item.moneda}.`, item);
         }
-        
         guardarEnNube({ ...db, deudas: deudasActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevaDeuda({ acreedor: '', monto: '', moneda: 'USD' });
       };
 
       const procesarPagoDeuda = (itemDeuda) => {
-        if (!pagoDeudaActivo.walletId) return alert('Elegí una billetera para descontar el pago.');
+        if (!pagoDeudaActivo.walletId || !pagoDeudaActivo.montoAbono) return alert('Completá los datos.');
         const abono = parseFloat(pagoDeudaActivo.montoAbono);
-        if (!abono || abono <= 0) return alert('Ingresá un monto válido a abonar.');
         if (abono > parseFloat(itemDeuda.monto)) return alert('No podés abonar más dinero del que debés.');
 
         const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abono, itemDeuda.moneda, db.activos);
-        if (!operacion.success) { return alert(operacion.msg); }
+        if (!operacion.success) return alert(operacion.msg); 
 
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abono;
         let deudasActualizadas = [];
-        
-        if (nuevoMontoDeuda <= 0.05) {
-            deudasActualizadas = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
-        } else {
-            deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
-        }
+        if (nuevoMontoDeuda <= 0.05) deudasActualizadas = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
+        else deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
 
         const walletUsada = operacion.activosActualizados.find(w => w.id === parseInt(pagoDeudaActivo.walletId))?.nombre;
         const log = generarLog('Abonó a Deuda', `Abonó ${abono} ${itemDeuda.moneda} a la deuda de "${itemDeuda.acreedor}" desde la billetera ${walletUsada}.`, { deudaOriginal: itemDeuda, abono, walletUsada });
@@ -360,8 +406,7 @@
 
       const agregarStock = (e) => {
         e.preventDefault();
-        if (!nuevoStock.concepto) return alert('Ingresá el concepto del repuesto.');
-        
+        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -379,7 +424,6 @@
         }
         
         const nuevaHistoriaStock = [...new Set([conceptoTrim, ...(db.historiaStock || [])])];
-        
         guardarEnNube({ ...db, stock: stockActualizado, historiaStock: nuevaHistoriaStock, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevoStock({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
         setMostrarInputStockLibre(false);
@@ -405,6 +449,17 @@
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       
       const patrimonioNetoRealUSD = totalBilleterasYActivosUSD + totalStockUSD - totalDeudasPendientesUSD;
+
+      // FILTRADO DE AUDITORÍA
+      const logsFiltrados = (db.actividad || []).filter(log => {
+          let matchUsr = true;
+          let matchDesde = true;
+          let matchHasta = true;
+          if (filtroUsuario) matchUsr = log.usuario.toLowerCase().includes(filtroUsuario.toLowerCase());
+          if (filtroDesde) matchDesde = new Date(log.fecha) >= new Date(filtroDesde + 'T00:00:00');
+          if (filtroHasta) matchHasta = new Date(log.fecha) <= new Date(filtroHasta + 'T23:59:59');
+          return matchUsr && matchDesde && matchHasta;
+      });
 
       // ==========================================
       // 5. INTERFACES
@@ -494,7 +549,6 @@
             {vista === 'patrimonio' && (
               <div className="max-w-6xl mx-auto space-y-8 pb-20 fade-in">
                 
-                {/* DASHBOARD DE TOTALES */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl relative overflow-hidden">
                     <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 relative z-10"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
@@ -683,9 +737,9 @@
                           <div>
                             <p className="font-bold text-white text-base">{item.concepto}</p>
                             <p className="text-[11px] text-slate-500 mt-1">{item.fecha} • {item.monto} {item.moneda}</p>
-                            <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Pagado con: {item.pagadoCon}</p>
+                            <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Dinero salió de: {item.pagadoCon}</p>
                           </div>
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
                             <span className="font-mono font-black text-rose-400 text-lg mr-2">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
                             <button onClick={() => setEditandoGastoPuntual({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
                             <button onClick={() => eliminarGastoPuntual(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
@@ -852,47 +906,96 @@
             )}
 
             {/* ----------------------------------------------------- */}
-            {/* VISTA 4: AUDITORÍA (LOGS DE ACTIVIDAD)                */}
+            {/* VISTA 4: AUDITORÍA (LOGS DE ACTIVIDAD CON ASISTENTE)  */}
             {/* ----------------------------------------------------- */}
             {vista === 'actividad' && (
               <div className="max-w-6xl mx-auto space-y-6 pb-20 fade-in">
+                
+                {/* CABECERA */}
                 <header className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl flex justify-between items-center">
                   <div>
-                    <h1 className="text-2xl font-black text-white">Registro de Actividad</h1>
-                    <p className="text-slate-400 text-sm mt-1">Trazabilidad completa de tu patrimonio.</p>
+                    <h1 className="text-2xl font-black text-white">Auditoría General</h1>
+                    <p className="text-slate-400 text-sm mt-1">Trazabilidad completa de tu sistema.</p>
                   </div>
-                  <i className="fa-solid fa-clock-rotate-left text-3xl text-indigo-500/50"></i>
+                  <i className="fa-solid fa-shield-halved text-3xl text-indigo-500/50"></i>
                 </header>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl overflow-x-auto">
-                  <table className="w-full text-left text-sm text-slate-300">
-                    <thead className="text-[10px] uppercase tracking-widest bg-slate-950 text-slate-400 border-b border-slate-800">
-                      <tr>
-                        <th className="px-4 py-4 rounded-tl-xl">Fecha y Hora</th>
-                        <th className="px-4 py-4">Usuario</th>
-                        <th className="px-4 py-4">Acción</th>
-                        <th className="px-4 py-4">Detalle</th>
-                        <th className="px-4 py-4 text-center rounded-tr-xl">Registro</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/50">
-                      {(db.actividad || []).length === 0 ? (
-                        <tr><td colSpan="5" className="text-center py-8 text-slate-500 font-bold">Sin actividad registrada todavía.</td></tr>
-                      ) : (db.actividad || []).map(log => (
-                        <tr key={log.id} className="hover:bg-slate-800/30 transition-colors">
-                          <td className="px-4 py-3 font-mono text-xs">{new Date(log.fecha).toLocaleString()}</td>
-                          <td className="px-4 py-3 font-bold text-blue-400">{log.usuario}</td>
-                          <td className="px-4 py-3 font-bold text-white whitespace-nowrap">{log.accion}</td>
-                          <td className="px-4 py-3 text-xs">{log.detalle}</td>
-                          <td className="px-4 py-3 text-center">
-                            <button onClick={() => setModalRegistroActividad(log)} className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap">
-                              <i className="fa-solid fa-eye"></i> Ver
-                            </button>
-                          </td>
+                {/* MODULO 1: ASISTENTE INTELIGENTE */}
+                <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 shadow-xl flex flex-col h-[350px]">
+                  <h3 className="font-black text-white text-base border-b border-slate-800 pb-3 mb-4 flex items-center gap-2">
+                    <i className="fa-solid fa-robot text-indigo-400"></i> Buscador Inteligente
+                  </h3>
+                  
+                  {/* Zona de Chat */}
+                  <div className="flex-1 overflow-y-auto space-y-4 pr-2 mb-4 hide-scrollbar">
+                    {chatAsistente.map((msj, idx) => (
+                      <div key={idx} className={`flex ${msj.emisor === 'user' ? 'justify-end' : 'justify-start'} fade-in`}>
+                        <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${msj.emisor === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-bl-none'}`}>
+                           <p className="whitespace-pre-line">{msj.texto}</p>
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={chatEndRef} />
+                  </div>
+
+                  {/* Input Chat */}
+                  <form onSubmit={procesarConsultaAsistente} className="flex gap-2">
+                    <input type="text" placeholder="Ej: Qué gastos se agregaron ayer..." value={consultaAsistente} onChange={e => setConsultaAsistente(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-indigo-500" />
+                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-3 rounded-xl transition"><i className="fa-solid fa-paper-plane"></i></button>
+                  </form>
+                </div>
+
+                {/* MODULO 2: TABLA Y FILTROS MANUALES */}
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+                  
+                  <div className="flex flex-col md:flex-row gap-4 border-b border-slate-800 pb-4">
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Filtrar por Usuario</label>
+                      <input type="text" placeholder="Ej: Bruno" value={filtroUsuario} onChange={e => setFiltroUsuario(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none text-xs" />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Desde Fecha</label>
+                      <input type="date" value={filtroDesde} onChange={e => setFiltroDesde(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none text-xs" />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Hasta Fecha</label>
+                      <input type="date" value={filtroHasta} onChange={e => setFiltroHasta(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none text-xs" />
+                    </div>
+                    <div className="flex items-end">
+                      <button onClick={() => {setFiltroUsuario(''); setFiltroDesde(''); setFiltroHasta('');}} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold w-full md:w-auto h-[34px]">Limpiar Filtros</button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm text-slate-300">
+                      <thead className="text-[10px] uppercase tracking-widest bg-slate-950 text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-4 rounded-tl-xl">Fecha y Hora</th>
+                          <th className="px-4 py-4">Usuario</th>
+                          <th className="px-4 py-4">Acción</th>
+                          <th className="px-4 py-4">Detalle</th>
+                          <th className="px-4 py-4 text-center rounded-tr-xl">Registro</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {logsFiltrados.length === 0 ? (
+                          <tr><td colSpan="5" className="text-center py-8 text-slate-500 font-bold">No hay actividad para mostrar.</td></tr>
+                        ) : logsFiltrados.map(log => (
+                          <tr key={log.id} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="px-4 py-3 font-mono text-xs">{new Date(log.fecha).toLocaleString()}</td>
+                            <td className="px-4 py-3 font-bold text-blue-400">{log.usuario}</td>
+                            <td className="px-4 py-3 font-bold text-white whitespace-nowrap">{log.accion}</td>
+                            <td className="px-4 py-3 text-xs">{log.detalle}</td>
+                            <td className="px-4 py-3 text-center">
+                              <button onClick={() => setModalRegistroActividad(log)} className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap">
+                                <i className="fa-solid fa-eye"></i> Ver
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
@@ -903,31 +1006,28 @@
           {/* MODALES DE EDICIÓN FLOTANTES */}
           {/* ============================================== */}
           
-          {/* MODAL REGISTRO ORIGINAL (AUDITORÍA) */}
+          {/* MODAL REGISTRO (AUDITORÍA LIMPIA) */}
           {modalRegistroActividad && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
-              <div className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-md w-full space-y-5 shadow-2xl">
-                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3"><i className="fa-solid fa-file-code text-indigo-400 mr-2"></i>Detalle del Registro</h3>
-                <div className="space-y-3 text-sm">
-                   <p><strong className="text-slate-400">Fecha y Hora:</strong> {new Date(modalRegistroActividad.fecha).toLocaleString()}</p>
-                   <p><strong className="text-slate-400">Ejecutado por:</strong> <span className="text-blue-400 font-bold">{modalRegistroActividad.usuario}</span></p>
-                   <p><strong className="text-slate-400">Acción:</strong> {modalRegistroActividad.accion}</p>
-                   <p className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-slate-300 text-xs leading-relaxed">{modalRegistroActividad.detalle}</p>
-                   
-                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 overflow-x-auto mt-4 shadow-inner">
-                     <p className="text-[10px] font-bold text-slate-500 mb-2 uppercase tracking-widest border-b border-slate-800 pb-2">Datos Internos (JSON Original)</p>
-                     <pre className="text-emerald-400 font-mono text-[10px] leading-relaxed">
-                        {modalRegistroActividad.datosExtra ? JSON.stringify(modalRegistroActividad.datosExtra, null, 2) : 'Sin datos extra guardados.'}
-                     </pre>
+              <div className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
+                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3"><i className="fa-solid fa-file-invoice text-indigo-400 mr-2"></i>Detalle del Registro</h3>
+                <div className="space-y-4 text-sm">
+                   <p><strong className="text-slate-400 block mb-1">Fecha y Hora:</strong> {new Date(modalRegistroActividad.fecha).toLocaleString()}</p>
+                   <p><strong className="text-slate-400 block mb-1">Ejecutado por:</strong> <span className="text-blue-400 font-bold">{modalRegistroActividad.usuario}</span></p>
+                   <p><strong className="text-slate-400 block mb-1">Acción Realizada:</strong> {modalRegistroActividad.accion}</p>
+                   <div>
+                     <strong className="text-slate-400 block mb-2">Explicación del Sistema:</strong>
+                     <p className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-slate-300 text-sm leading-relaxed">{modalRegistroActividad.detalle}</p>
                    </div>
                 </div>
-                <div className="pt-2">
-                  <button onClick={() => setModalRegistroActividad(null)} className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition">Cerrar Detalle</button>
+                <div className="pt-4">
+                  <button onClick={() => setModalRegistroActividad(null)} className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition">Cerrar</button>
                 </div>
               </div>
             </div>
           )}
 
+          {/* (RESTO DE MODALES DE EDICION) */}
           {editandoActivo && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
