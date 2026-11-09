@@ -74,14 +74,18 @@
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      // ESTADOS DE FORMULARIOS
+      // ESTADOS DE FORMULARIOS PATRIMONIALES Y VENTAS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
+      
       const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
+      
+      // NUEVO COBRAR: Ya no nos importa en qué moneda lo carga. 
       const [nuevaDeudaCobrar, setNuevaDeudaCobrar] = useState({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' }); 
+      
       const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
@@ -89,8 +93,8 @@
       // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+      
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS' });
 
       // ESTADOS UI DE MODALES
@@ -98,7 +102,7 @@
       const [dolarInput, setDolarInput] = useState('');
       const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
       const [pagoDeudaActivo, setPagoDeudaActivo] = useState({ idDeuda: null, walletId: '', montoAbono: '' });
-      const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '' }); 
+      const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' }); 
       
       const [editandoActivo, setEditandoActivo] = useState(null);
       const [editandoFijo, setEditandoFijo] = useState(null);
@@ -140,7 +144,15 @@
                 gastosFijos: Array.isArray(data.payload.gastosFijos) ? data.payload.gastosFijos.filter(Boolean) : [],
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
                 deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
-                deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean) : [],
+                
+                // MIGRACIÓN INTERNA: Forzar que deudasCobrar siempre use la moneda USD internamente para unificar saldos
+                deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean).map(d => {
+                    if(d.moneda !== 'USD'){
+                        return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(2), moneda: 'USD' };
+                    }
+                    return d;
+                }) : [],
+
                 stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean) : [],
                 ventas: Array.isArray(data.payload.ventas) ? data.payload.ventas.filter(Boolean) : [],
                 taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [],
@@ -193,6 +205,12 @@
           else return monedaBase === 'ARS' ? val : val * db.cotizacionDolar;
       };
 
+      // Helper estricto interno para llevar TODO a USD dentro de la base de datos (Para la unificación de cobros)
+      const aUSDBase = (monto, moneda, coti) => {
+          const val = parseFloat(monto) || 0;
+          return moneda === 'USD' ? val : (val / coti);
+      };
+
       const formatDinero = (monto) => {
           if (modoPrivado) return `**** ${monedaVisual}`;
           const val = parseFloat(monto || 0);
@@ -204,18 +222,15 @@
           return Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)); 
       };
 
-      // ==========================================
-      // FUNCIONES DE LIMPIEZA
-      // ==========================================
       const limpiarHistoriaConceptos = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos?")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
           guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
       };
 
       const limpiarHistoriaStock = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos?")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
           guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
@@ -335,11 +350,14 @@
         if (!nuevoGastoPuntual.walletId || !nuevoGastoPuntual.concepto) return alert('Completá los datos.');
         const operacion = procesarDescuentoSeguro(nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda, db.activos);
         if (!operacion.success) return alert(operacion.msg); 
+        
         const walletUsada = db.activos.find(w => w.id === parseInt(nuevoGastoPuntual.walletId));
         const conceptoTrim = nuevoGastoPuntual.concepto.trim();
         const item = { id: Date.now(), concepto: conceptoTrim, monto: parseFloat(nuevoGastoPuntual.monto) || 0, moneda: nuevoGastoPuntual.moneda, fecha: new Date().toLocaleDateString(), pagadoCon: walletUsada?.nombre || 'Desconocido', walletIdOriginal: walletUsada?.id };
+
         const nuevaHistoriaConceptos = [...new Set([conceptoTrim, ...(db.historiaConceptos || [])])];
         const log = generarLog('Creó Gasto Suelto', `Registró gasto en "${item.concepto}" por ${item.monto} ${item.moneda}. Pagado con ${item.pagadoCon}.`, item);
+
         guardarEnNube({ ...db, activos: operacion.activosActualizados, gastosPuntuales: [item, ...(db.gastosPuntuales || [])], historiaConceptos: nuevaHistoriaConceptos, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevoGastoPuntual({ concepto: '', monto: '', moneda: 'ARS', walletId: nuevoGastoPuntual.walletId });
         setMostrarInputConceptoLibre(false);
@@ -438,6 +456,7 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
       };
 
+      // --- MÓDULO CUENTAS A COBRAR (UNIFICADAS) ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -446,41 +465,61 @@
         const operacion = procesarDescuentoSeguro(nuevaDeudaCobrar.walletId, montoPrestado, nuevaDeudaCobrar.moneda, db.activos);
         if (!operacion.success) return alert(operacion.msg);
 
+        // TRANSFORMACIÓN INTERNA: Todo se guarda en USD para unificar las cuentas
+        const montoBaseAguardarEnUSD = aUSDBase(montoPrestado, nuevaDeudaCobrar.moneda, db.cotizacionDolar);
+        
         let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
-        const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() && d.moneda === nuevaDeudaCobrar.moneda);
+        // Solo importa el Deudor y Motivo para unificar. La moneda ya no divide las tarjetas.
+        const idxExistente = deudasCobrarActualizadas.findIndex(d => 
+            d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() &&
+            d.motivo.trim().toLowerCase() === nuevaDeudaCobrar.motivo.trim().toLowerCase()
+        );
 
         let log;
         if (idxExistente !== -1) {
-          deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoPrestado).toFixed(2);
-          deudasCobrarActualizadas[idxExistente].motivo = nuevaDeudaCobrar.motivo.trim(); 
+          deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoBaseAguardarEnUSD).toFixed(2);
           log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} extra a "${deudasCobrarActualizadas[idxExistente].deudor}". Motivo: ${nuevaDeudaCobrar.motivo}`, deudasCobrarActualizadas[idxExistente]);
         } else {
-          const item = { id: Date.now(), fechaTimestamp: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), motivo: nuevaDeudaCobrar.motivo.trim(), monto: montoPrestado.toFixed(2), moneda: nuevaDeudaCobrar.moneda, fecha: new Date().toLocaleDateString() };
+          const item = { 
+              id: Date.now(), fechaTimestamp: Date.now(), 
+              deudor: nuevaDeudaCobrar.deudor.trim(), 
+              motivo: nuevaDeudaCobrar.motivo.trim(), 
+              monto: montoBaseAguardarEnUSD.toFixed(2), 
+              moneda: 'USD', // Siempre se guarda en USD como valor absoluto
+              fecha: new Date().toLocaleDateString() 
+          };
           deudasCobrarActualizadas.unshift(item);
-          log = generarLog('Creó Cuenta a Cobrar', `Prestó ${item.monto} ${item.moneda} a "${item.deudor}". Motivo: ${item.motivo}`, item);
+          log = generarLog('Creó Cuenta a Cobrar', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} a "${item.deudor}". Motivo: ${item.motivo}`, item);
         }
 
         guardarEnNube({ ...db, activos: operacion.activosActualizados, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
       };
 
-      const procesarCobroDeuda = (itemDeuda) => {
-        if (!cobroDeudaActivo.walletId || !cobroDeudaActivo.montoCobro) return alert('Completá los datos.');
-        const cobro = parseFloat(cobroDeudaActivo.montoCobro);
-        if (cobro > parseFloat(itemDeuda.monto)) return alert('No podés cobrar más dinero del que te deben.');
+      const procesarCobroDeudaLibre = (itemDeuda) => {
+        if (!cobroDeudaActivo.walletId || !cobroDeudaActivo.montoCobro) return alert('Completá los datos del cobro.');
+        const cobroEntregadoFisico = parseFloat(cobroDeudaActivo.montoCobro);
+        if (cobroEntregadoFisico <= 0) return alert('Ingresá un monto válido.');
 
-        const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobro, itemDeuda.moneda, db.activos);
-        const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - cobro;
+        // Convertir lo que el cliente te da (en ARS o USD) al valor interno base de la tarjeta (que ahora siempre es USD)
+        const abonoBaseUSD = aUSDBase(cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.cotizacionDolar);
+        
+        if (abonoBaseUSD > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
+
+        // Ingresa la plata real a la billetera en la moneda física que dijo el usuario
+        const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.activos);
+        
+        const nuevoMontoDeudaUSD = parseFloat(itemDeuda.monto) - abonoBaseUSD;
         let deudasCobrarActualizadas = [];
         
-        if (nuevoMontoDeuda <= 0.05) deudasCobrarActualizadas = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
-        else deudasCobrarActualizadas = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
+        if (nuevoMontoDeudaUSD <= 0.05) deudasCobrarActualizadas = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
+        else deudasCobrarActualizadas = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeudaUSD.toFixed(2) } : d);
 
         const walletUsada = activosConCobro.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
-        const log = generarLog('Registró Cobro', `Recibió ${cobro} ${itemDeuda.moneda} de "${itemDeuda.deudor}". Dinero ingresado a billetera ${walletUsada}.`, { deudaOriginal: itemDeuda, cobro, walletUsada });
+        const log = generarLog('Registró Cobro', `Recibió ${cobroEntregadoFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Dinero ingresado a billetera ${walletUsada}.`, { deudaOriginal: itemDeuda, cobroEntregadoFisico, walletUsada });
 
         guardarEnNube({ ...db, activos: activosConCobro, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '' });
+        setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' });
       };
 
       const eliminarDeudaCobrar = (itemDeuda) => {
@@ -490,8 +529,10 @@
         }
       };
 
+      // --- STOCK ---
       const agregarStock = (e) => {
         e.preventDefault();
+        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -523,6 +564,7 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
+      // --- MÓDULO VENTAS ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
@@ -533,16 +575,21 @@
           const registroVenta = { id: Date.now(), fecha: new Date().toLocaleDateString(), cantidad, comisionUnitaria, totalComision, moneda: nuevaVenta.moneda };
           const ventasActualizadas = [registroVenta, ...(db.ventas || [])];
 
+          // Integración con unificación: Convertimos a USD interno
+          const totalComisionUSD = aUSDBase(totalComision, nuevaVenta.moneda, db.cotizacionDolar);
+          
           let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
           const acreedorComisiones = "Comisiones de Venta de Equipos";
-          const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === acreedorComisiones && d.moneda === nuevaVenta.moneda);
+          const motivoComisiones = "Acumulado de ventas";
+          
+          const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === acreedorComisiones && d.motivo === motivoComisiones);
 
           if (idxExistente !== -1) {
-              deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + totalComision).toFixed(2);
+              deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + totalComisionUSD).toFixed(2);
           } else {
               const itemCobrar = {
-                  id: Date.now() + 1, fechaTimestamp: Date.now(), deudor: acreedorComisiones, motivo: "Acumulado de ventas",
-                  monto: totalComision.toFixed(2), moneda: nuevaVenta.moneda, fecha: new Date().toLocaleDateString()
+                  id: Date.now() + 1, fechaTimestamp: Date.now(), deudor: acreedorComisiones, motivo: motivoComisiones,
+                  monto: totalComisionUSD.toFixed(2), moneda: 'USD', fecha: new Date().toLocaleDateString()
               };
               deudasCobrarActualizadas.unshift(itemCobrar);
           }
@@ -618,10 +665,14 @@
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
           if (!equipo) return alert('Error: Equipo no encontrado en el taller.');
 
+          // GUARDADO INTERNO: Llevamos el monto de finalización a USD interno para compatibilidad universal
+          const montoFinUSD = aUSDBase(montoFin, nuevaReparacionFinalizada.monedaCobro, db.cotizacionDolar);
+
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
-              equipoOriginal: equipo, montoCobrado: montoFin, monedaCobro: nuevaReparacionFinalizada.monedaCobro,
-              montoAdeudadoRestante: montoFin,
+              equipoOriginal: equipo, 
+              montoCobrado: montoFinUSD, monedaCobro: 'USD', // Convertido al unificado
+              montoAdeudadoRestante: montoFinUSD, // Deuda inicial es el 100%
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar'
           };
           
@@ -633,14 +684,14 @@
 
           if (equipo.origen === 'gremio') {
               let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
-              const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === equipo.gremio && d.moneda === nuevaReparacionFinalizada.monedaCobro);
+              const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === equipo.gremio && d.motivo === "Acumulado de Reparaciones Gremio");
 
               if (idxExistente !== -1) {
-                  deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoFin).toFixed(2);
+                  deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoFinUSD).toFixed(2);
               } else {
                   const itemCobrar = {
-                      id: Date.now() + 1, fechaTimestamp: Date.now(), deudor: equipo.gremio, motivo: "Acumulado de Reparaciones",
-                      monto: montoFin.toFixed(2), moneda: nuevaReparacionFinalizada.monedaCobro, fecha: new Date().toLocaleDateString()
+                      id: Date.now() + 1, fechaTimestamp: Date.now(), deudor: equipo.gremio, motivo: "Acumulado de Reparaciones Gremio",
+                      monto: montoFinUSD.toFixed(2), moneda: 'USD', fecha: new Date().toLocaleDateString()
                   };
                   deudasCobrarActualizadas.unshift(itemCobrar);
               }
@@ -663,20 +714,21 @@
           if (montoEntregadoFisico <= 0) return alert('Monto inválido.');
           
           const monedaEntregada = panelCobroReparacion.monedaPago;
-          const monedaDeuda = itemReparacion.monedaCobro;
+          const monedaDeuda = itemReparacion.monedaCobro; // Internamente ahora siempre es USD
           
-          let montoAImputarEnDeuda = montoEntregadoFisico;
-          if (monedaEntregada === 'ARS' && monedaDeuda === 'USD') montoAImputarEnDeuda = montoEntregadoFisico / db.cotizacionDolar;
-          if (monedaEntregada === 'USD' && monedaDeuda === 'ARS') montoAImputarEnDeuda = montoEntregadoFisico * db.cotizacionDolar;
+          // Convertimos lo que entregó el cliente a la base universal (USD)
+          const abonoBaseUSD = aUSDBase(montoEntregadoFisico, monedaEntregada, db.cotizacionDolar);
 
           const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? parseFloat(itemReparacion.montoAdeudadoRestante) : parseFloat(itemReparacion.montoCobrado);
-          
-          const nuevoRestante = adeudadoActual - montoAImputarEnDeuda;
+          const nuevoRestante = adeudadoActual - abonoBaseUSD;
           
           if (nuevoRestante < -0.05) {
-              return alert(`Estás cobrando de más. El cliente debe el equivalente a ${adeudadoActual.toFixed(2)} ${monedaDeuda}. Revisá el monto o la moneda de pago que pusiste.`);
+              // Aviso en la moneda que él está viendo
+              const avisoExceso = formatDinero(convertirParaMostrar(adeudadoActual, 'USD'));
+              return alert(`Estás cobrando de más. El cliente debe un equivalente a ${avisoExceso}. Revisá el monto.`);
           }
 
+          // La plata se guarda fisicamente en la billetera como él dijo (ej: ARS en Mercadopago)
           const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, montoEntregadoFisico, monedaEntregada, db.activos);
           
           const estadoFinal = nuevoRestante <= 0.05 ? 'cobrado' : 'pendiente';
@@ -690,7 +742,7 @@
           const walletUsada = activosConCobro.find(w => w.id === parseInt(panelCobroReparacion.walletId))?.nombre;
           const logMsg = estadoFinal === 'cobrado' 
               ? `Canceló saldo total. Entregó ${montoEntregadoFisico} ${monedaEntregada} en ${walletUsada}.` 
-              : `Abonó seña. Entregó ${montoEntregadoFisico} ${monedaEntregada} en ${walletUsada}. Restan cobrar ${nuevoRestante.toFixed(2)} ${monedaDeuda}.`;
+              : `Abonó seña. Entregó ${montoEntregadoFisico} ${monedaEntregada} en ${walletUsada}.`;
               
           const log = generarLog('Cobró Reparación Cliente', `[${itemReparacion.equipoOriginal.modelo}]: ${logMsg}`);
 
@@ -711,18 +763,15 @@
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
       const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalDeudasCobrarUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
-      
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
-      
       const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
       const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
       
       const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
           const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
-          const cobradoReal = parseFloat(item.montoCobrado) - adeudado;
-          const enUSD = item.monedaCobro === 'USD' ? cobradoReal : cobradoReal / db.cotizacionDolar;
-          return acc + (enUSD > 0 ? enUSD : 0);
+          const cobradoReal = parseFloat(item.montoCobrado) - adeudado; // Base original USD
+          return acc + (cobradoReal > 0 ? cobradoReal : 0);
       }, 0);
 
       const patrimonioNetoRealUSD = totalBilleterasUSD + totalActivosFisicosUSD + totalStockUSD - totalDeudasPendientesUSD;
@@ -1255,7 +1304,7 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (CON COBRO PARCIAL) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS (CON COBRO PARCIAL TOTALMENTE LIBRE) */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1279,6 +1328,7 @@
                                 return;
                             }
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
+                            // LA MAGIA DE LA EXPERIENCIA: Autocompleta pero deja todo 100% libre para edición manual directa.
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
                             } else {
@@ -1291,10 +1341,11 @@
                     </div>
 
                     <div>
-                        <label className="text-xs text-slate-400 font-bold block mb-1">Precio Final a Cobrarle (Caja libre y conversor automático)</label>
+                        <label className="text-xs text-slate-400 font-bold block mb-1">Precio Final a Cobrarle</label>
                         <div className="flex">
                             <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
                             <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
+                                // CONVERSIÓN EN VIVO DEL CAMPO LIBRE
                                 const nuevaMoneda = e.target.value;
                                 const monedaActual = nuevaReparacionFinalizada.monedaCobro;
                                 let nuevoMonto = nuevaReparacionFinalizada.montoCobrado;
@@ -1345,7 +1396,7 @@
                                     <div className="mt-1 pt-1 border-t border-slate-800/50">
                                         <p className="text-[10px] text-rose-400 font-bold uppercase">Falta pagar</p>
                                         <span className="font-mono font-bold text-rose-400 text-lg">
-                                            {formatDinero(convertirParaMostrar(item.montoAdeudadoRestante !== undefined ? item.montoAdeudadoRestante : item.montoCobrado, item.monedaCobro))}
+                                            {formatDinero(convertirParaMostrar(item.montoAdeudadoRestante !== undefined ? item.montoAdeudadoRestante : item.montoCobrado, 'USD'))}
                                         </span>
                                     </div>
                                 )}
@@ -1505,14 +1556,18 @@
                           <div className="bg-slate-900 p-4 rounded-xl border border-indigo-500/50 flex flex-col gap-3 fade-in">
                             <div className="flex gap-2">
                               <input type="number" step="any" placeholder="Monto que te dio" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
-                              <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
-                                <option value="">¿A qué billetera entró la plata?</option>
-                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                              <select value={cobroDeudaActivo.monedaCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, monedaCobro: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
+                                <option value="ARS">ARS</option>
+                                <option value="USD">USD</option>
                               </select>
                             </div>
+                            <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white">
+                                <option value="">¿A qué billetera entró la plata?</option>
+                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                            </select>
                             <div className="flex gap-2">
-                              <button onClick={() => procesarCobroDeuda(item)} className="flex-1 bg-indigo-600 text-white font-bold py-2 rounded-lg">Confirmar Ingreso</button>
-                              <button onClick={() => setCobroDeudaActivo({idDeuda: null, walletId: '', montoCobro: ''})} className="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold">Cancelar</button>
+                              <button onClick={() => procesarCobroDeudaLibre(item)} className="flex-1 bg-indigo-600 text-white font-bold py-2 rounded-lg">Confirmar Ingreso</button>
+                              <button onClick={() => setCobroDeudaActivo({idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS'})} className="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold">Cancelar</button>
                             </div>
                           </div>
                         ) : (
@@ -1521,7 +1576,7 @@
                               <button onClick={() => setEditandoDeudaCobrar({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: item.monto })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar</button>
+                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: item.monto, monedaCobro: 'ARS' })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar / Abonar</button>
                           </div>
                         )}
                       </div>
