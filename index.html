@@ -23,7 +23,6 @@
   <script type="text/babel">
     const { useState, useEffect, Component } = React;
 
-    // EL ESCUDO ANTI-CRASHEOS
     class ErrorBoundary extends Component {
       constructor(props) { super(props); this.state = { hasError: false, errorInfo: null }; }
       static getDerivedStateFromError(error) { return { hasError: true, errorInfo: error.message }; }
@@ -44,62 +43,48 @@
     }
 
     // ==========================================
-    // 1. CONEXIÓN A TU NUEVA BASE DE DATOS
+    // 1. CONEXIÓN A BASE DE DATOS
     // ==========================================
     const SUPABASE_URL = "https://nbluvlbsuvmkcaflmjei.supabase.co";
     const SUPABASE_KEY = "sb_publishable_IuVcRy48mLa5P02gRC7B_Q_tI3C6Wuk";
     
-    // Cambié el nombre de esta variable a supaClient para evitar conflictos con Vercel
     let supaClient = null;
     try {
-      if (window.supabase) {
-        supaClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      }
+      if (window.supabase) supaClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     } catch (err) { console.error("Error iniciando Supabase:", err); }
 
-    // Plantilla base para cuando la base de datos está vacía
-    const DB_TEMPLATE = {
-      cotizacionDolar: 1500,
-      activos: [],
-      gastosFijos: [],
-      gastosPuntuales: []
-    };
+    const DB_TEMPLATE = { cotizacionDolar: 1500, activos: [], gastosFijos: [], gastosPuntuales: [] };
 
     function App() {
-      // ESTADOS DE SISTEMA
       const [isLoaded, setIsLoaded] = useState(false);
       const [sesion, setSesion] = useState(false);
       const [passInput, setPassInput] = useState('');
       const [errorLogin, setErrorLogin] = useState('');
 
-      // EL CEREBRO DE TUS DATOS (Reflejo de la nube)
       const [db, setDb] = useState(DB_TEMPLATE);
 
       // ESTADOS DE FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD' });
-      const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3' });
-      const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS' });
+      // Gasto Suelto ahora exige Billetera (origen)
+      const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
+      // Gasto Fijo ahora tiene día del mes
+      const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
 
       // ESTADOS UI
       const [editandoDolar, setEditandoDolar] = useState(false);
       const [dolarInput, setDolarInput] = useState('');
+      // Para controlar qué cuota estamos pagando y mostrar el selector de billetera inline
+      const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
 
       // ==========================================
-      // 2. LECTURA DE SUPABASE (Al entrar)
+      // 2. LECTURA DE NUBE
       // ==========================================
       useEffect(() => {
         async function fetchNube() {
-          // Si el cliente falló, cortamos igual la pantalla de carga para que no se trabe
-          if (!supaClient) {
-            console.warn("No se pudo conectar a la base de datos externa.");
-            setIsLoaded(true);
-            return;
-          }
-
+          if (!supaClient) { setIsLoaded(true); return; }
           try {
             const { data, error } = await supaClient.from('iconnecture_data').select('payload').eq('id', 1).single();
             if (error) throw error;
-            
             if (data && data.payload) {
               setDb({
                 cotizacionDolar: data.payload.cotizacionDolar || 1500,
@@ -108,32 +93,20 @@
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : []
               });
             }
-          } catch (err) {
-            console.error("Base de datos limpia, iniciando de cero.", err);
-          }
-          // AHORA ESTO SIEMPRE SE EJECUTA
+          } catch (err) { console.error("Iniciando de cero."); }
           setIsLoaded(true);
         }
         fetchNube();
       }, []);
 
-      // ==========================================
-      // 3. MOTOR DE ESCRITURA EN LA NUBE
-      // ==========================================
       const guardarEnNube = async (nuevoEstadoDb) => {
-        setDb(nuevoEstadoDb); // Actualiza la pantalla rápido
+        setDb(nuevoEstadoDb);
         if (supaClient) {
           const { error } = await supaClient.from('iconnecture_data').update({ payload: nuevoEstadoDb }).eq('id', 1);
-          if (error) {
-            console.error("Error al subir a la nube:", error);
-            alert("Atención: No se pudo guardar en la nube. Revisá tu conexión.");
-          }
+          if (error) alert("Atención: No se pudo guardar en la nube. Revisá tu conexión.");
         }
       };
 
-      // ==========================================
-      // 4. FUNCIONES Y CÁLCULOS
-      // ==========================================
       const login = (e) => {
         e.preventDefault();
         if (passInput === 'bruno123') { setSesion(true); setErrorLogin(''); }
@@ -149,7 +122,25 @@
         return `$ ${parseFloat(montoUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
       };
 
-      // --- HANDLERS PARA AGREGAR DATOS ---
+      // ==========================================
+      // LÓGICA CORE: RESTAR DE BILLETERA
+      // ==========================================
+      const descontarDeBilletera = (activosActuales, walletId, montoGasto, monedaGasto) => {
+        return activosActuales.map(wallet => {
+          if (wallet.id === parseInt(walletId)) {
+            let montoARestar = parseFloat(montoGasto);
+            
+            // Inteligencia Multimoneda: Si la billetera es USD y gasté en ARS, convierto.
+            if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
+            if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
+            
+            return { ...wallet, monto: (parseFloat(wallet.monto) - montoARestar).toFixed(2) }; // Resta real
+          }
+          return wallet;
+        });
+      };
+
+      // --- HANDLERS PARA AGREGAR ---
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre, monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda };
@@ -157,26 +148,59 @@
         setNuevoActivo({ nombre: '', monto: '', moneda: 'USD' });
       };
 
-      const agregarGastoFijo = (e) => {
-        e.preventDefault();
-        const item = { 
-          id: Date.now(), concepto: nuevoGastoFijo.concepto, monto: parseFloat(nuevoGastoFijo.monto) || 0, 
-          moneda: nuevoGastoFijo.moneda, tipo: nuevoGastoFijo.tipo,
-          cuotasTotales: nuevoGastoFijo.tipo === 'cuotas' ? parseInt(nuevoGastoFijo.cuotasTotales) || 1 : null,
-          cuotasPagadas: nuevoGastoFijo.tipo === 'cuotas' ? 1 : null
-        };
-        guardarEnNube({ ...db, gastosFijos: [item, ...db.gastosFijos] });
-        setNuevoGastoFijo({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3' });
-      };
-
       const agregarGastoPuntual = (e) => {
         e.preventDefault();
+        if (!nuevoGastoPuntual.walletId) return alert('Por favor, seleccioná de qué billetera salió el dinero.');
+        if (db.activos.length === 0) return alert('Primero tenés que crear una Billetera o Activo.');
+
+        // 1. Restamos la plata
+        const activosActualizados = descontarDeBilletera(db.activos, nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda);
+        
+        // 2. Anotamos el gasto
+        const walletUsada = db.activos.find(w => w.id === parseInt(nuevoGastoPuntual.walletId));
         const item = { 
           id: Date.now(), concepto: nuevoGastoPuntual.concepto, monto: parseFloat(nuevoGastoPuntual.monto) || 0, 
-          moneda: nuevoGastoPuntual.moneda, fecha: new Date().toLocaleDateString()
+          moneda: nuevoGastoPuntual.moneda, fecha: new Date().toLocaleDateString(), pagadoCon: walletUsada?.nombre || 'Desconocido'
         };
-        guardarEnNube({ ...db, gastosPuntuales: [item, ...db.gastosPuntuales] });
-        setNuevoGastoPuntual({ concepto: '', monto: '', moneda: 'ARS' });
+
+        guardarEnNube({ ...db, activos: activosActualizados, gastosPuntuales: [item, ...db.gastosPuntuales] });
+        setNuevoGastoPuntual({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
+      };
+
+      const agregarGastoFijo = (e) => {
+        e.preventDefault();
+        // Agregar fijo NO resta plata hoy, solo lo anota para pagar después
+        const item = { 
+          id: Date.now(), concepto: nuevoGastoFijo.concepto, monto: parseFloat(nuevoGastoFijo.monto) || 0, 
+          moneda: nuevoGastoFijo.moneda, tipo: nuevoGastoFijo.tipo, diaVencimiento: nuevoGastoFijo.diaVencimiento,
+          cuotasTotales: nuevoGastoFijo.tipo === 'cuotas' ? parseInt(nuevoGastoFijo.cuotasTotales) || 1 : null,
+          cuotasPagadas: nuevoGastoFijo.tipo === 'cuotas' ? 0 : null,
+          ultimoPago: null
+        };
+        guardarEnNube({ ...db, gastosFijos: [item, ...db.gastosFijos] });
+        setNuevoGastoFijo({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
+      };
+
+      const procesarPagoFijo = (itemFijo) => {
+        if (!pagoActivo.walletId) return alert('Elegí una billetera para descontar el pago.');
+        
+        // 1. Restamos la plata de la billetera
+        const activosActualizados = descontarDeBilletera(db.activos, pagoActivo.walletId, itemFijo.monto, itemFijo.moneda);
+        
+        // 2. Actualizamos el estado del gasto (sumamos cuota o anotamos la fecha)
+        const gastosFijosActualizados = db.gastosFijos.map(g => {
+          if (g.id === itemFijo.id) {
+            return { 
+              ...g, 
+              cuotasPagadas: g.tipo === 'cuotas' ? g.cuotasPagadas + 1 : g.cuotasPagadas,
+              ultimoPago: new Date().toLocaleDateString()
+            };
+          }
+          return g;
+        });
+
+        guardarEnNube({ ...db, activos: activosActualizados, gastosFijos: gastosFijosActualizados });
+        setPagoActivo({ idGasto: null, walletId: '' }); // Cerramos el menu de pago
       };
 
       // --- CÁLCULOS TOTALES ---
@@ -185,12 +209,9 @@
       const totalGastosPuntualesUSD = db.gastosPuntuales.reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
 
       // ==========================================
-      // 5. INTERFACES (PANTALLAS)
+      // 5. INTERFACES
       // ==========================================
-      
-      if (!isLoaded) {
-        return <div className="flex h-screen items-center justify-center font-bold text-blue-400 animate-pulse text-xl">Conectando a tu Nube...</div>;
-      }
+      if (!isLoaded) return <div className="flex h-screen items-center justify-center font-bold text-blue-400 animate-pulse text-xl">Conectando a tu Nube...</div>;
 
       if (!sesion) {
         return (
@@ -242,16 +263,16 @@
           {/* DASHBOARD DE TOTALES */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl">
-              <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-vault mr-2"></i>Patrimonio Total</p>
+              <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-vault mr-2"></i>Patrimonio Disponible</p>
               <h2 className="text-4xl font-black text-white">{formatDinero(totalPatrimonioUSD)}</h2>
               <p className="text-slate-400 text-xs font-mono mt-3 bg-slate-950/50 inline-block px-3 py-1.5 rounded-lg border border-slate-800">Eq: ${(totalPatrimonioUSD * db.cotizacionDolar).toLocaleString('es-AR')} ARS</p>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-calendar-days mr-2"></i>Gastos Fijos</p>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-calendar-days mr-2"></i>Carga Fija Mensual</p>
               <h2 className="text-3xl font-black text-amber-400">{formatDinero(totalGastosFijosUSD)}<span className="text-sm text-slate-500 ml-1">/mes</span></h2>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-receipt mr-2"></i>Gastos Sueltos</p>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-receipt mr-2"></i>Gastos Sueltos Históricos</p>
               <h2 className="text-3xl font-black text-rose-400">{formatDinero(totalGastosPuntualesUSD)}</h2>
             </div>
           </div>
@@ -263,11 +284,11 @@
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
               <div className="border-b border-slate-800 pb-3">
                 <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-wallet text-blue-400 mr-2"></i>Billeteras y Activos</h3>
-                <p className="text-xs text-slate-400 mt-1">Cuentas, efectivo, valor de autos, etc.</p>
+                <p className="text-xs text-slate-400 mt-1">Cuentas, efectivo, etc. (El origen de la plata).</p>
               </div>
               
               <form onSubmit={agregarActivo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
-                <input type="text" required placeholder="Nombre (Ej: Mercadopago / Efectivo)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" />
+                <input type="text" required placeholder="Nombre (Ej: Mercadopago)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" />
                 <div className="flex gap-2">
                   <input type="number" step="any" required placeholder="Monto" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-blue-500 text-lg" />
                   <select value={nuevoActivo.moneda} onChange={e => setNuevoActivo({...nuevoActivo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-blue-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
@@ -280,7 +301,7 @@
                   <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex justify-between items-center hover:border-slate-700 transition">
                     <div>
                       <p className="font-bold text-white text-base">{item.nombre}</p>
-                      <p className="text-[11px] text-slate-500 font-mono mt-1">Ingresado: {item.monto} {item.moneda}</p>
+                      <p className="text-[11px] text-emerald-400 font-bold font-mono mt-1">Saldo: {item.monto} {item.moneda}</p>
                     </div>
                     <div className="flex items-center gap-4">
                       <span className="font-mono font-black text-blue-400 text-lg">{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
@@ -295,38 +316,66 @@
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
               <div className="border-b border-slate-800 pb-3">
                 <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-calendar-check text-amber-400 mr-2"></i>Fijos y Cuotas</h3>
-                <p className="text-xs text-slate-400 mt-1">Suscripciones o compras a largo plazo.</p>
+                <p className="text-xs text-slate-400 mt-1">Se agregan acá y se descuentan al tocarlas.</p>
               </div>
 
               <form onSubmit={agregarGastoFijo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                 <div className="flex gap-2">
-                  <input type="text" required placeholder="Concepto (Ej: Gimnasio)" value={nuevoGastoFijo.concepto} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, concepto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500" />
-                  <select value={nuevoGastoFijo.tipo} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, tipo: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-amber-500"><option value="fijo">Fijo Mensual</option><option value="cuotas">Cuotas</option></select>
+                  <input type="text" required placeholder="Concepto (Ej: Gimnasio)" value={nuevoGastoFijo.concepto} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, concepto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white focus:outline-none focus:border-amber-500" />
+                  <select value={nuevoGastoFijo.tipo} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, tipo: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-2 py-3 text-white font-bold focus:outline-none focus:border-amber-500"><option value="fijo">Fijo</option><option value="cuotas">Cuotas</option></select>
                 </div>
                 <div className="flex gap-2">
-                  <input type="number" step="any" required placeholder="Monto" value={nuevoGastoFijo.monto} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-500 text-lg" />
-                  <select value={nuevoGastoFijo.moneda} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-2 py-3 text-white font-bold focus:outline-none focus:border-amber-500"><option value="ARS">ARS</option><option value="USD">USD</option></select>
-                  {nuevoGastoFijo.tipo === 'cuotas' && <input type="number" required placeholder="Meses" value={nuevoGastoFijo.cuotasTotales} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, cuotasTotales: e.target.value})} className="w-20 bg-slate-900 border border-amber-500 rounded-xl px-3 py-3 text-white font-mono focus:outline-none" title="Cantidad total de cuotas" />}
-                  <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-5 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
+                  <div className="flex-1 flex border border-slate-700 rounded-xl overflow-hidden bg-slate-900 focus-within:border-amber-500">
+                    <input type="number" step="any" required placeholder="Monto" value={nuevoGastoFijo.monto} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, monto: e.target.value})} className="w-full px-3 py-3 bg-transparent text-white font-mono focus:outline-none" />
+                    <select value={nuevoGastoFijo.moneda} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, moneda: e.target.value})} className="bg-slate-800 px-2 text-white font-bold focus:outline-none"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                  </div>
+                  {nuevoGastoFijo.tipo === 'cuotas' ? (
+                    <input type="number" required placeholder="Cuotas" value={nuevoGastoFijo.cuotasTotales} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, cuotasTotales: e.target.value})} className="w-20 bg-slate-900 border border-amber-500 rounded-xl px-3 py-3 text-white font-mono focus:outline-none" />
+                  ) : (
+                    <input type="number" required min="1" max="31" placeholder="Día" value={nuevoGastoFijo.diaVencimiento} onChange={e => setNuevoGastoFijo({...nuevoGastoFijo, diaVencimiento: e.target.value})} className="w-20 bg-slate-900 border border-amber-500 rounded-xl px-3 py-3 text-white font-mono focus:outline-none" title="Día de vencimiento (1-31)" />
+                  )}
+                  <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                 </div>
               </form>
 
               <div className="space-y-3">
                 {db.gastosFijos.length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Sin gastos fijos.</p> : db.gastosFijos.map(item => (
-                  <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex justify-between items-center hover:border-slate-700 transition">
-                    <div>
-                      <p className="font-bold text-white text-base">{item.concepto} {item.tipo === 'cuotas' && <span className="bg-amber-950 text-amber-400 px-2 py-0.5 rounded border border-amber-800 text-[10px] ml-2">Cuota {item.cuotasPagadas}/{item.cuotasTotales}</span>}</p>
-                      <p className="text-[11px] text-slate-500 font-mono mt-1">Valor base: {item.monto} {item.moneda}</p>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <span className="font-mono font-black text-amber-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
-                      <div className="flex flex-col gap-2">
-                        {item.tipo === 'cuotas' && item.cuotasPagadas < item.cuotasTotales && (
-                          <button onClick={() => guardarEnNube({...db, gastosFijos: db.gastosFijos.map(x => x.id === item.id ? { ...x, cuotasPagadas: x.cuotasPagadas + 1 } : x)})} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-1.5 rounded-lg text-[10px] font-bold transition">+1 Pago</button>
-                        )}
-                        <button onClick={() => guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id)})} className="bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-800 px-3 py-1.5 rounded-lg text-[10px] font-bold transition"><i className="fa-solid fa-trash"></i> Eliminar</button>
+                  <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3 hover:border-slate-700 transition">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-bold text-white text-base">
+                          {item.concepto} 
+                          {item.tipo === 'cuotas' ? 
+                            <span className="bg-amber-950 text-amber-400 px-2 py-0.5 rounded border border-amber-800 text-[10px] ml-2">Cuota {item.cuotasPagadas}/{item.cuotasTotales}</span> 
+                            : <span className="bg-slate-800 text-slate-400 px-2 py-0.5 rounded text-[9px] ml-2 uppercase">Vence día {item.diaVencimiento}</span>
+                          }
+                        </p>
+                        <p className="text-[11px] text-slate-500 font-mono mt-1">Valor a descontar: {item.monto} {item.moneda}</p>
+                        {item.ultimoPago && <p className="text-[10px] text-emerald-500 mt-1"><i className="fa-solid fa-check mr-1"></i>Últ. pago: {item.ultimoPago}</p>}
                       </div>
+                      <span className="font-mono font-black text-amber-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
                     </div>
+
+                    {/* SELECTOR DE PAGO INLINE */}
+                    {pagoActivo.idGasto === item.id ? (
+                      <div className="bg-slate-900 p-3 rounded-xl border border-amber-500/50 flex gap-2 fade-in">
+                        <select value={pagoActivo.walletId} onChange={e => setPagoActivo({...pagoActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
+                          <option value="">¿Con qué billetera pagás?</option>
+                          {db.activos.map(a => <option key={a.id} value={a.id}>{a.nombre} (Saldo: {a.monto})</option>)}
+                        </select>
+                        <button onClick={() => procesarPagoFijo(item)} className="bg-emerald-600 text-white font-bold px-3 py-2 rounded-lg text-xs">Ok</button>
+                        <button onClick={() => setPagoActivo({idGasto: null, walletId: ''})} className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs"><i className="fa-solid fa-xmark"></i></button>
+                      </div>
+                    ) : (
+                      <div className="flex justify-end gap-2 border-t border-slate-800/50 pt-2">
+                        {(!item.cuotasTotales || item.cuotasPagadas < item.cuotasTotales) && (
+                          <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-1.5 rounded-lg text-[10px] font-bold transition">
+                            {item.tipo === 'cuotas' ? 'Pagar Cuota' : 'Pagar este Mes'}
+                          </button>
+                        )}
+                        <button onClick={() => guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id)})} className="bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-800 px-3 py-1.5 rounded-lg text-[10px] font-bold transition"><i className="fa-solid fa-trash"></i></button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -336,14 +385,23 @@
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
               <div className="border-b border-slate-800 pb-3">
                 <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-cart-shopping text-rose-400 mr-2"></i>Gastos Sueltos</h3>
-                <p className="text-xs text-slate-400 mt-1">Lo que fuiste gastando en el día a día.</p>
+                <p className="text-xs text-slate-400 mt-1">Se descuentan automáticamente de tu saldo.</p>
               </div>
 
               <form onSubmit={agregarGastoPuntual} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                 <input type="text" required placeholder="Concepto (Ej: Kiosco, Uber...)" value={nuevoGastoPuntual.concepto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, concepto: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500" />
                 <div className="flex gap-2">
-                  <input type="number" step="any" required placeholder="Monto" value={nuevoGastoPuntual.monto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-rose-500 text-lg" />
-                  <select value={nuevoGastoPuntual.moneda} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-rose-500"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                  <div className="flex-1 flex border border-slate-700 rounded-xl overflow-hidden bg-slate-900 focus-within:border-rose-500">
+                    <input type="number" step="any" required placeholder="Monto" value={nuevoGastoPuntual.monto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, monto: e.target.value})} className="w-full px-3 py-3 bg-transparent text-white font-mono focus:outline-none text-lg" />
+                    <select value={nuevoGastoPuntual.moneda} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, moneda: e.target.value})} className="bg-slate-800 px-2 text-white font-bold focus:outline-none"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                  </div>
+                </div>
+                {/* SELECTOR DE BILLETERA OBLIGATORIO PARA GASTO SUELTO */}
+                <div className="flex gap-2">
+                  <select value={nuevoGastoPuntual.walletId} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs focus:outline-none focus:border-rose-500">
+                    <option value="">¿De qué billetera pagaste?</option>
+                    {db.activos.map(a => <option key={a.id} value={a.id}>{a.nombre} (Saldo disp: {a.monto})</option>)}
+                  </select>
                   <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-5 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                 </div>
               </form>
@@ -353,7 +411,8 @@
                   <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex justify-between items-center hover:border-slate-700 transition">
                     <div>
                       <p className="font-bold text-white text-base">{item.concepto}</p>
-                      <p className="text-[11px] text-slate-500 mt-1">{item.fecha} • Base: {item.monto} {item.moneda}</p>
+                      <p className="text-[11px] text-slate-500 mt-1">{item.fecha} • {item.monto} {item.moneda}</p>
+                      <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Pagado de: {item.pagadoCon}</p>
                     </div>
                     <div className="flex items-center gap-4">
                       <span className="font-mono font-black text-rose-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
