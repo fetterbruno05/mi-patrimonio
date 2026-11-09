@@ -57,7 +57,7 @@
         cotizacionDolar: 1500, fechaUltimaCotizacion: '',
         activos: [], gastosFijos: [], gastosPuntuales: [], 
         deudas: [], deudasCobrar: [], 
-        stock: [], ventas: [], taller: [], // NUEVO: Módulo Taller
+        stock: [], ventas: [], taller: [], 
         historiaConceptos: [], historiaStock: [], historiaGremios: ['iConnecture'], actividad: [] 
     };
 
@@ -90,9 +90,9 @@
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
-      // NUEVO: ESTADO DE TALLER
+      // ESTADO DE TALLER (Con moneda)
       const [nuevaReparacion, setNuevaReparacion] = useState({
-        origen: 'cliente', // 'cliente' o 'gremio'
+        origen: 'cliente',
         gremio: '',
         modelo: '',
         imei: '',
@@ -100,7 +100,8 @@
         clienteTelefono: '',
         estadoVisual: '',
         falla: '',
-        presupuesto: ''
+        presupuesto: '',
+        presupuestoMoneda: 'ARS'
       });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
 
@@ -117,6 +118,7 @@
       const [editandoDeudaCobrar, setEditandoDeudaCobrar] = useState(null); 
       const [editandoStock, setEditandoStock] = useState(null);
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
+      
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       // ESTADOS DE AUDITORÍA
@@ -157,7 +159,7 @@
                 deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean) : [],
                 stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean) : [],
                 ventas: Array.isArray(data.payload.ventas) ? data.payload.ventas.filter(Boolean) : [],
-                taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [], // Carga taller
+                taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [],
                 historiaConceptos: Array.isArray(data.payload.historiaConceptos) ? data.payload.historiaConceptos : [],
                 historiaStock: Array.isArray(data.payload.historiaStock) ? data.payload.historiaStock : [],
                 historiaGremios: Array.isArray(data.payload.historiaGremios) ? data.payload.historiaGremios : ['iConnecture'],
@@ -212,7 +214,6 @@
           return `${monedaVisual === 'USD' ? 'U$D' : '$'} ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${monedaVisual}`;
       };
 
-      // Se usa Timestamp en milisegundos para ser 100% exacto con los días
       const calcularDiasPasados = (timestamp) => {
           if (!timestamp) return 0;
           return Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)); 
@@ -314,9 +315,8 @@
       };
 
       // ==========================================
-      // HANDLERS FINANCIEROS (PATRIMONIO Y GASTOS)
+      // HANDLERS FINANCIEROS Y DE NEGOCIO
       // ==========================================
-      
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre.trim(), monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
@@ -510,6 +510,7 @@
 
       const agregarStock = (e) => {
         e.preventDefault();
+        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -577,19 +578,24 @@
           }
       };
 
-      // ==========================================
-      // NUEVO: HANDLERS DEL TALLER
-      // ==========================================
+      // --- MÓDULO TALLER (CON VALIDACIONES Y MONEDA EN PRESUPUESTO) ---
       const agregarReparacion = (e) => {
           e.preventDefault();
           
-          if (!nuevaReparacion.modelo || !nuevaReparacion.imei || !nuevaReparacion.estadoVisual || !nuevaReparacion.falla) {
-              return alert('Completá los campos obligatorios del equipo (Modelo, IMEI, Estado Visual y Falla).');
+          if (nuevaReparacion.imei.length !== 15) {
+              return alert('Error: El IMEI debe tener exactamente 15 números.');
+          }
+
+          if (!nuevaReparacion.modelo || !nuevaReparacion.estadoVisual || !nuevaReparacion.falla) {
+              return alert('Completá los campos obligatorios del equipo (Modelo, Estado Visual y Falla).');
           }
 
           if (nuevaReparacion.origen === 'cliente') {
-              if (!nuevaReparacion.clienteNombre || !nuevaReparacion.clienteTelefono) {
-                  return alert('Al ser un cliente particular, tenés que ingresar Nombre y Teléfono de contacto.');
+              if (nuevaReparacion.clienteTelefono.length !== 10) {
+                  return alert('Error: El número de teléfono debe tener exactamente 10 números (Cód área sin 0 + número sin 15).');
+              }
+              if (!nuevaReparacion.clienteNombre) {
+                  return alert('Al ser un cliente particular, tenés que ingresar el Nombre de contacto.');
               }
           } else {
               if (!nuevaReparacion.gremio) {
@@ -597,14 +603,13 @@
               }
           }
 
-          // Armado del objeto a guardar (Usamos Date.now() en timestamp para calcular días exactos)
           const tsNow = Date.now();
           const gremioFinal = nuevaReparacion.origen === 'gremio' ? nuevaReparacion.gremio.trim() : '';
 
           const itemTaller = {
               id: tsNow,
               fechaTimestamp: tsNow,
-              origen: nuevaReparacion.origen, // 'cliente' o 'gremio'
+              origen: nuevaReparacion.origen,
               gremio: gremioFinal,
               modelo: nuevaReparacion.modelo.trim(),
               imei: nuevaReparacion.imei.trim(),
@@ -612,10 +617,10 @@
               clienteTelefono: nuevaReparacion.origen === 'cliente' ? nuevaReparacion.clienteTelefono.trim() : '',
               estadoVisual: nuevaReparacion.estadoVisual.trim(),
               falla: nuevaReparacion.falla.trim(),
-              presupuesto: nuevaReparacion.origen === 'cliente' ? nuevaReparacion.presupuesto.trim() : ''
+              presupuesto: nuevaReparacion.origen === 'cliente' ? (parseFloat(nuevaReparacion.presupuesto) || null) : null,
+              presupuestoMoneda: nuevaReparacion.origen === 'cliente' ? nuevaReparacion.presupuestoMoneda : 'ARS'
           };
 
-          // Actualizar historial de gremios si es uno nuevo
           let nuevosGremios = db.historiaGremios || ['iConnecture'];
           if (nuevaReparacion.origen === 'gremio' && gremioFinal) {
               nuevosGremios = [...new Set([gremioFinal, ...nuevosGremios])];
@@ -631,9 +636,8 @@
               actividad: [log, ...(db.actividad || [])].slice(0, 500) 
           });
 
-          // Limpiar formulario pero dejar seleccionado el tab anterior
           setNuevaReparacion({
-            origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: ''
+            origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS'
           });
           setMostrarInputGremioLibre(false);
       };
@@ -748,12 +752,11 @@
               <button onClick={() => setVista('ventas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'ventas' ? 'bg-emerald-500 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <i className="fa-solid fa-cash-register w-5 text-center"></i> Ventas de Equipos
               </button>
-              {/* NUEVA PESTAÑA TALLER */}
               <button onClick={() => setVista('taller')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'taller' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <i className="fa-solid fa-screwdriver-wrench w-5 text-center"></i> Taller / Reparaciones
               </button>
 
-              <button onClick={() => setVista('cobrar')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'cobrar' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+              <button onClick={() => setVista('cobrar')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'cobrar' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <i className="fa-solid fa-hand-holding-dollar w-5 text-center"></i> Cuentas a Cobrar
               </button>
               <button onClick={() => setVista('deudas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'deudas' ? 'bg-rose-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
@@ -1120,7 +1123,7 @@
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Registrar Ventas del Día</h3>
-                    <p className="text-xs text-slate-400 mt-1">El total de la comisión se sumará automáticamente a "Cuentas por Cobrar".</p>
+                    <p className="text-xs text-slate-400 mt-1">El total de la comisión se sumará automáticamente a "Cuentas por Cobrar" para que no lo pierdas de vista.</p>
                   </div>
                   
                   <form onSubmit={registrarVenta} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-4 shadow-inner">
@@ -1203,8 +1206,11 @@
                                     <input type="text" required value={nuevaReparacion.clienteNombre} onChange={e => setNuevaReparacion({...nuevaReparacion, clienteNombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs" />
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Teléfono</label>
-                                    <input type="text" required value={nuevaReparacion.clienteTelefono} onChange={e => setNuevaReparacion({...nuevaReparacion, clienteTelefono: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs" />
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Teléfono (10 números)</label>
+                                    <input type="text" maxLength="10" required placeholder="Ej: 3412345678" value={nuevaReparacion.clienteTelefono} onChange={e => {
+                                        const val = e.target.value.replace(/\D/g, ''); // Rechaza letras y símbolos
+                                        setNuevaReparacion({...nuevaReparacion, clienteTelefono: val});
+                                    }} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs font-mono" />
                                 </div>
                               </>
                           ) : (
@@ -1235,8 +1241,11 @@
                                   <input type="text" required placeholder="Ej: iPhone 13 Pro" value={nuevaReparacion.modelo} onChange={e => setNuevaReparacion({...nuevaReparacion, modelo: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs" />
                               </div>
                               <div>
-                                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI</label>
-                                  <input type="text" required placeholder="Últimos 4 o completo" value={nuevaReparacion.imei} onChange={e => setNuevaReparacion({...nuevaReparacion, imei: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-xs" />
+                                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI (15 números)</label>
+                                  <input type="text" maxLength="15" required placeholder="15 dígitos exactos" value={nuevaReparacion.imei} onChange={e => {
+                                      const val = e.target.value.replace(/\D/g, ''); // Rechaza letras y símbolos
+                                      setNuevaReparacion({...nuevaReparacion, imei: val});
+                                  }} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-[10px]" />
                               </div>
                           </div>
 
@@ -1253,7 +1262,10 @@
                           {nuevaReparacion.origen === 'cliente' && (
                               <div>
                                   <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Presupuesto Estimado</label>
-                                  <input type="text" placeholder="Ej: $45.000 o A confirmar" value={nuevaReparacion.presupuesto} onChange={e => setNuevaReparacion({...nuevaReparacion, presupuesto: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs font-mono" />
+                                  <div className="flex gap-2">
+                                      <input type="number" step="any" placeholder="Vacío = A confirmar" value={nuevaReparacion.presupuesto} onChange={e => setNuevaReparacion({...nuevaReparacion, presupuesto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-xs" />
+                                      <select value={nuevaReparacion.presupuestoMoneda} onChange={e => setNuevaReparacion({...nuevaReparacion, presupuestoMoneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-white text-xs font-bold focus:outline-none focus:border-cyan-500"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                                  </div>
                               </div>
                           )}
                       </div>
@@ -1294,8 +1306,24 @@
                                           <div className="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-800/50">
                                               <p className="text-xs text-slate-300"><strong className="text-slate-500 uppercase tracking-wider text-[9px] block mb-0.5">Falla Declarada:</strong> {item.falla}</p>
                                               <p className="text-xs text-slate-400"><strong className="text-slate-500 uppercase tracking-wider text-[9px] block mb-0.5">Estado Visual:</strong> {item.estadoVisual}</p>
-                                              {item.origen === 'cliente' && item.presupuesto && (
-                                                  <p className="text-xs text-emerald-400 font-mono mt-2 border-t border-slate-800 pt-2">Presupuesto: {item.presupuesto}</p>
+                                              
+                                              {/* FORMATO DE PRESUPUESTO */}
+                                              {item.origen === 'cliente' && (
+                                                  <div className="mt-2 border-t border-slate-800 pt-2">
+                                                    {item.presupuesto ? (
+                                                        isNaN(parseFloat(item.presupuesto)) ? (
+                                                            // Legacy catch por si hay strings guardados antes
+                                                            <p className="text-xs text-emerald-400 font-mono">Presupuesto: {item.presupuesto}</p>
+                                                        ) : (
+                                                            <p className="text-xs text-emerald-400 font-mono">
+                                                                Presupuesto: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))}
+                                                                {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}
+                                                            </p>
+                                                        )
+                                                    ) : (
+                                                        <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>
+                                                    )}
+                                                  </div>
                                               )}
                                           </div>
                                       </div>
@@ -1320,7 +1348,7 @@
               </div>
             )}
 
-            {/* VISTA 5: DEUDAS A OTROS */}
+            {/* VISTA 5: DEUDAS A OTROS (Con Motivo) */}
             {vista === 'deudas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1398,7 +1426,7 @@
               </div>
             )}
 
-            {/* VISTA 6: DEUDAS HACIA MÍ (COBRAR) */}
+            {/* VISTA 6: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO */}
             {vista === 'cobrar' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
