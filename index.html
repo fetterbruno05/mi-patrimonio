@@ -74,7 +74,7 @@
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      // ESTADOS DE FORMULARIOS PATRIMONIALES Y VENTAS
+      // ESTADOS FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
@@ -82,8 +82,6 @@
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       
       const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
-      
-      // NUEVO COBRAR: Ya no nos importa en qué moneda lo carga. 
       const [nuevaDeudaCobrar, setNuevaDeudaCobrar] = useState({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' }); 
       
       const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
@@ -93,16 +91,19 @@
       // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
+      
+      // ESTADOS DE PAGO / COBRO PARCIAL
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
       
+      const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
+      // Se agrega moneda al pago de deuda para pagar multimoneda libremente
+      const [pagoDeudaActivo, setPagoDeudaActivo] = useState({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
+      const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' }); 
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS' });
 
-      // ESTADOS UI DE MODALES
+      // ESTADOS UI
       const [editandoDolar, setEditandoDolar] = useState(false);
       const [dolarInput, setDolarInput] = useState('');
-      const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
-      const [pagoDeudaActivo, setPagoDeudaActivo] = useState({ idDeuda: null, walletId: '', montoAbono: '' });
-      const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' }); 
       
       const [editandoActivo, setEditandoActivo] = useState(null);
       const [editandoFijo, setEditandoFijo] = useState(null);
@@ -110,6 +111,7 @@
       const [editandoDeudaCobrar, setEditandoDeudaCobrar] = useState(null); 
       const [editandoStock, setEditandoStock] = useState(null);
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
+      
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       // ESTADOS DE AUDITORÍA
@@ -117,7 +119,7 @@
       const [filtroDesde, setFiltroDesde] = useState('');
       const [filtroHasta, setFiltroHasta] = useState('');
       const [consultaAsistente, setConsultaAsistente] = useState('');
-      const [chatAsistente, setChatAsistente] = useState([{ emisor: 'bot', texto: '¡Hola! Soy tu asistente de auditoría. Preguntame por ej: "qué gastos agregué ayer", o "movimientos de stock".' }]);
+      const [chatAsistente, setChatAsistente] = useState([{ emisor: 'bot', texto: '¡Hola! Soy tu asistente de auditoría. Preguntame por ej: "qué gastos agregué ayer", o "movimientos de stock de hoy".' }]);
       const chatEndRef = useRef(null);
 
       const generarLog = (accion, detalle, datosExtra = null) => {
@@ -145,7 +147,7 @@
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
                 deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
                 
-                // MIGRACIÓN INTERNA: Forzar que deudasCobrar siempre use la moneda USD internamente para unificar saldos
+                // MIGRACIÓN INTERNA: Forzar que deudasCobrar siempre use USD internamente para unificar saldos
                 deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean).map(d => {
                     if(d.moneda !== 'USD'){
                         return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(2), moneda: 'USD' };
@@ -199,22 +201,40 @@
           setBloqueoCotizacion(false);
       };
 
-      const convertirParaMostrar = (montoBase, monedaBase) => {
-          const val = parseFloat(montoBase) || 0;
-          if (monedaVisual === 'USD') return monedaBase === 'USD' ? val : val / db.cotizacionDolar;
-          else return monedaBase === 'ARS' ? val : val * db.cotizacionDolar;
-      };
+      // ==========================================
+      // CORRECCIÓN MATEMÁTICA: PRECISIÓN DE CENTAVOS
+      // ==========================================
+      const redondear = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
 
-      // Helper estricto interno para llevar TODO a USD dentro de la base de datos (Para la unificación de cobros)
+      // Helper estricto interno para llevar TODO a USD dentro de la base de datos
       const aUSDBase = (monto, moneda, coti) => {
           const val = parseFloat(monto) || 0;
           return moneda === 'USD' ? val : (val / coti);
       };
 
-      const formatDinero = (monto) => {
-          if (modoPrivado) return `**** ${monedaVisual}`;
+      const convertirParaMostrar = (montoBase, monedaBase, forzarMonedaVisual = null) => {
+          const val = parseFloat(montoBase) || 0;
+          const monedaObjetivo = forzarMonedaVisual || monedaVisual;
+          
+          if (monedaObjetivo === 'USD') {
+              return monedaBase === 'USD' ? redondear(val) : redondear(val / db.cotizacionDolar);
+          } else {
+              // Convertir a ARS: Siempre sin centavos
+              return monedaBase === 'ARS' ? Math.round(val) : Math.round(val * db.cotizacionDolar);
+          }
+      };
+
+      const formatDinero = (monto, overrideMoneda = null) => {
+          if (modoPrivado) return `**** ${overrideMoneda || monedaVisual}`;
           const val = parseFloat(monto || 0);
-          return `${monedaVisual === 'USD' ? 'U$D' : '$'} ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${monedaVisual}`;
+          const monedaFinal = overrideMoneda || monedaVisual;
+          
+          if (monedaFinal === 'USD') {
+              return `U$D ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+          } else {
+              // Los pesos se muestran redondos, sin decimales (.00)
+              return `$ ${Math.round(val).toLocaleString('es-AR')} ARS`;
+          }
       };
 
       const calcularDiasPasados = (timestamp) => {
@@ -292,8 +312,8 @@
         if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
         if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
         
-        if (parseFloat(wallet.monto) < montoARestar) {
-            return { success: false, msg: `Saldo insuficiente en ${wallet.nombre}. Tenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${montoARestar.toFixed(2)} ${wallet.moneda}.` };
+        if (parseFloat(wallet.monto) < redondear(montoARestar)) {
+            return { success: false, msg: `Saldo insuficiente en ${wallet.nombre}. Tenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${redondear(montoARestar)} ${wallet.moneda}.` };
         }
         
         activosClon[idx].monto = (parseFloat(wallet.monto) - montoARestar).toFixed(2);
@@ -416,6 +436,7 @@
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
+      // --- DEUDAS A OTROS Y COBRO PARCIAL MULTIMONEDA ---
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
@@ -436,27 +457,37 @@
         setNuevaDeuda({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
       };
 
-      const procesarPagoDeuda = (itemDeuda) => {
+      // CORRECCIÓN PAGO DEUDA MULTIMONEDA (Yo le pago a Mateo)
+      const procesarPagoDeudaLibre = (itemDeuda) => {
         if (!pagoDeudaActivo.walletId || !pagoDeudaActivo.montoAbono) return alert('Completá los datos.');
-        const abono = parseFloat(pagoDeudaActivo.montoAbono);
-        if (abono > parseFloat(itemDeuda.monto)) return alert('No podés abonar más dinero del que debés.');
+        const abonoFisicoEntregado = parseFloat(pagoDeudaActivo.montoAbono);
+        if (abonoFisicoEntregado <= 0) return alert('Monto inválido.');
 
-        const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abono, itemDeuda.moneda, db.activos);
+        // Convertir la moneda del pago a la moneda de la tarjeta de la deuda
+        let abonoConvertido = abonoFisicoEntregado;
+        if (pagoDeudaActivo.monedaAbono === 'ARS' && itemDeuda.moneda === 'USD') abonoConvertido = abonoFisicoEntregado / db.cotizacionDolar;
+        if (pagoDeudaActivo.monedaAbono === 'USD' && itemDeuda.moneda === 'ARS') abonoConvertido = abonoFisicoEntregado * db.cotizacionDolar;
+
+        if (redondear(abonoConvertido) > parseFloat(itemDeuda.monto) + 0.05) return alert(`Estás intentando pagar de más. La deuda es de ${itemDeuda.monto} ${itemDeuda.moneda}.`);
+
+        // Descontamos físicamente la plata de la billetera (respetando la moneda del pago)
+        const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abonoFisicoEntregado, pagoDeudaActivo.monedaAbono, db.activos);
         if (!operacion.success) return alert(operacion.msg); 
 
-        const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abono;
+        const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abonoConvertido;
         let deudasActualizadas = [];
         if (nuevoMontoDeuda <= 0.05) deudasActualizadas = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
         else deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
 
         const walletUsada = operacion.activosActualizados.find(w => w.id === parseInt(pagoDeudaActivo.walletId))?.nombre;
-        const log = generarLog('Abonó a Deuda', `Abonó ${abono} ${itemDeuda.moneda} a la deuda de "${itemDeuda.acreedor}" desde la billetera ${walletUsada}.`, { deudaOriginal: itemDeuda, abono, walletUsada });
+        const log = generarLog('Abonó a Deuda', `Abonó ${abonoFisicoEntregado} ${pagoDeudaActivo.monedaAbono} a la deuda de "${itemDeuda.acreedor}" desde la billetera ${walletUsada}. Restan ${nuevoMontoDeuda.toFixed(2)} ${itemDeuda.moneda}.`);
 
         guardarEnNube({ ...db, activos: operacion.activosActualizados, deudas: deudasActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
+        setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
       };
 
-      // --- MÓDULO CUENTAS A COBRAR (UNIFICADAS) ---
+
+      // --- MÓDULO CUENTAS A COBRAR ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -469,7 +500,6 @@
         const montoBaseAguardarEnUSD = aUSDBase(montoPrestado, nuevaDeudaCobrar.moneda, db.cotizacionDolar);
         
         let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
-        // Solo importa el Deudor y Motivo para unificar. La moneda ya no divide las tarjetas.
         const idxExistente = deudasCobrarActualizadas.findIndex(d => 
             d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() &&
             d.motivo.trim().toLowerCase() === nuevaDeudaCobrar.motivo.trim().toLowerCase()
@@ -485,7 +515,7 @@
               deudor: nuevaDeudaCobrar.deudor.trim(), 
               motivo: nuevaDeudaCobrar.motivo.trim(), 
               monto: montoBaseAguardarEnUSD.toFixed(2), 
-              moneda: 'USD', // Siempre se guarda en USD como valor absoluto
+              moneda: 'USD', // Siempre se guarda en USD
               fecha: new Date().toLocaleDateString() 
           };
           deudasCobrarActualizadas.unshift(item);
@@ -496,17 +526,18 @@
         setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
       };
 
+      // CORRECCIÓN COBRO PARCIAL MULTIMONEDA (Mateo me paga a mi)
       const procesarCobroDeudaLibre = (itemDeuda) => {
         if (!cobroDeudaActivo.walletId || !cobroDeudaActivo.montoCobro) return alert('Completá los datos del cobro.');
         const cobroEntregadoFisico = parseFloat(cobroDeudaActivo.montoCobro);
         if (cobroEntregadoFisico <= 0) return alert('Ingresá un monto válido.');
 
-        // Convertir lo que el cliente te da (en ARS o USD) al valor interno base de la tarjeta (que ahora siempre es USD)
+        // Convertir lo que el cliente te da al valor base en USD (que es como están unificadas las tarjetas ahora)
         const abonoBaseUSD = aUSDBase(cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.cotizacionDolar);
         
-        if (abonoBaseUSD > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
+        if (redondear(abonoBaseUSD) > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
 
-        // Ingresa la plata real a la billetera en la moneda física que dijo el usuario
+        // Ingresa la plata real a la billetera en la moneda física que se seleccionó
         const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.activos);
         
         const nuevoMontoDeudaUSD = parseFloat(itemDeuda.monto) - abonoBaseUSD;
@@ -516,7 +547,7 @@
         else deudasCobrarActualizadas = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeudaUSD.toFixed(2) } : d);
 
         const walletUsada = activosConCobro.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
-        const log = generarLog('Registró Cobro', `Recibió ${cobroEntregadoFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Dinero ingresado a billetera ${walletUsada}.`, { deudaOriginal: itemDeuda, cobroEntregadoFisico, walletUsada });
+        const log = generarLog('Registró Cobro', `Recibió ${cobroEntregadoFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Dinero ingresado a billetera ${walletUsada}.`);
 
         guardarEnNube({ ...db, activos: activosConCobro, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' });
@@ -564,7 +595,6 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
-      // --- MÓDULO VENTAS ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
@@ -589,7 +619,8 @@
           } else {
               const itemCobrar = {
                   id: Date.now() + 1, fechaTimestamp: Date.now(), deudor: acreedorComisiones, motivo: motivoComisiones,
-                  monto: totalComisionUSD.toFixed(2), moneda: 'USD', fecha: new Date().toLocaleDateString()
+                  monto: totalComisionUSD.toFixed(2), moneda: 'USD', // Siempre se unifica en USD
+                  fecha: new Date().toLocaleDateString()
               };
               deudasCobrarActualizadas.unshift(itemCobrar);
           }
@@ -655,6 +686,7 @@
           }
       };
 
+      // FINALIZAR REPARACIÓN (Con conversión en vivo libre de candados)
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto a cobrar.');
@@ -665,14 +697,14 @@
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
           if (!equipo) return alert('Error: Equipo no encontrado en el taller.');
 
-          // GUARDADO INTERNO: Llevamos el monto de finalización a USD interno para compatibilidad universal
+          // Convertimos todo a la moneda base USD interna del sistema para que no haya problemas a futuro
           const montoFinUSD = aUSDBase(montoFin, nuevaReparacionFinalizada.monedaCobro, db.cotizacionDolar);
 
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
               equipoOriginal: equipo, 
-              montoCobrado: montoFinUSD, monedaCobro: 'USD', // Convertido al unificado
-              montoAdeudadoRestante: montoFinUSD, // Deuda inicial es el 100%
+              montoCobrado: montoFinUSD, monedaCobro: 'USD', 
+              montoAdeudadoRestante: montoFinUSD, 
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar'
           };
           
@@ -705,7 +737,7 @@
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
       };
 
-      // MAGIA: COBRO PARCIAL (MULTIBILLETERA Y MULTIMONEDA)
+      // COBRO PARCIAL MULTIMONEDA PARA CLIENTES EN TALLER
       const cobrarReparacionClienteParcial = (e, itemReparacion) => {
           e.preventDefault();
           if (!panelCobroReparacion.walletId || !panelCobroReparacion.montoCobro) return alert('Elegí a qué billetera entra la plata y cuánto te dio el cliente.');
@@ -714,24 +746,21 @@
           if (montoEntregadoFisico <= 0) return alert('Monto inválido.');
           
           const monedaEntregada = panelCobroReparacion.monedaPago;
-          const monedaDeuda = itemReparacion.monedaCobro; // Internamente ahora siempre es USD
           
-          // Convertimos lo que entregó el cliente a la base universal (USD)
+          // La reparación adentro ahora siempre está guardada en USD
           const abonoBaseUSD = aUSDBase(montoEntregadoFisico, monedaEntregada, db.cotizacionDolar);
-
           const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? parseFloat(itemReparacion.montoAdeudadoRestante) : parseFloat(itemReparacion.montoCobrado);
+          
           const nuevoRestante = adeudadoActual - abonoBaseUSD;
           
-          if (nuevoRestante < -0.05) {
-              // Aviso en la moneda que él está viendo
+          if (redondear(nuevoRestante) < -0.05) {
               const avisoExceso = formatDinero(convertirParaMostrar(adeudadoActual, 'USD'));
               return alert(`Estás cobrando de más. El cliente debe un equivalente a ${avisoExceso}. Revisá el monto.`);
           }
 
-          // La plata se guarda fisicamente en la billetera como él dijo (ej: ARS en Mercadopago)
           const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, montoEntregadoFisico, monedaEntregada, db.activos);
           
-          const estadoFinal = nuevoRestante <= 0.05 ? 'cobrado' : 'pendiente';
+          const estadoFinal = redondear(nuevoRestante) <= 0 ? 'cobrado' : 'pendiente';
           const reparacionesFinActualizadas = (db.reparacionesFin || []).map(r => {
               if (r.id === itemReparacion.id) {
                   return { ...r, montoAdeudadoRestante: nuevoRestante, estadoCobro: estadoFinal };
@@ -763,8 +792,10 @@
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
       const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalDeudasCobrarUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
+      
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
+      
       const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
       const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
       
@@ -1304,13 +1335,12 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (CON COBRO PARCIAL TOTALMENTE LIBRE) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-clipboard-check mr-2"></i>Histórico Ganancias de Taller</p>
                   <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalGananciaReparacionesUSD, 'USD'))}</h2>
-                  <p className="text-slate-400 text-xs font-mono mt-3">Refleja lo que efectivamente ya te pagaron.</p>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
@@ -1328,7 +1358,7 @@
                                 return;
                             }
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
-                            // LA MAGIA DE LA EXPERIENCIA: Autocompleta pero deja todo 100% libre para edición manual directa.
+                            // LA MAGIA: Autocompleta libremente, respetando la moneda y el número exacto
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
                             } else {
@@ -1341,18 +1371,17 @@
                     </div>
 
                     <div>
-                        <label className="text-xs text-slate-400 font-bold block mb-1">Precio Final a Cobrarle</label>
+                        <label className="text-xs text-slate-400 font-bold block mb-1">Precio Final a Cobrarle (Caja libre y conversión en vivo)</label>
                         <div className="flex">
                             <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
                             <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
-                                // CONVERSIÓN EN VIVO DEL CAMPO LIBRE
                                 const nuevaMoneda = e.target.value;
                                 const monedaActual = nuevaReparacionFinalizada.monedaCobro;
                                 let nuevoMonto = nuevaReparacionFinalizada.montoCobrado;
-                                
+                                // Convertir matemáticamente a la vista al tocar el botón
                                 if(nuevoMonto) {
-                                    if(nuevaMoneda === 'ARS' && monedaActual === 'USD') nuevoMonto = (parseFloat(nuevoMonto) * db.cotizacionDolar).toFixed(2);
-                                    if(nuevaMoneda === 'USD' && monedaActual === 'ARS') nuevoMonto = (parseFloat(nuevoMonto) / db.cotizacionDolar).toFixed(2);
+                                    if(nuevaMoneda === 'ARS' && monedaActual === 'USD') nuevoMonto = Math.round(parseFloat(nuevoMonto) * db.cotizacionDolar);
+                                    if(nuevaMoneda === 'USD' && monedaActual === 'ARS') nuevoMonto = redondear(parseFloat(nuevoMonto) / db.cotizacionDolar);
                                 }
                                 setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: nuevaMoneda, montoCobrado: nuevoMonto});
                             }} className="bg-slate-900 border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1366,7 +1395,6 @@
                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Historial de Reparaciones Finalizadas</h4>
                     {(db.reparacionesFin || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.reparacionesFin || []).map(item => {
                         const esPendiente = item.estadoCobro === 'pendiente';
-                        
                         return (
                           <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                             <div className="flex-1 w-full">
@@ -1391,12 +1419,12 @@
                             <div className="flex flex-col items-end gap-3 min-w-[150px] w-full md:w-auto">
                               <div className="text-right w-full">
                                 <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Precio Total</p>
-                                <span className="font-mono font-black text-cyan-400 text-2xl">{formatDinero(convertirParaMostrar(item.montoCobrado, item.monedaCobro))}</span>
+                                <span className="font-mono font-black text-cyan-400 text-2xl">{formatDinero(convertirParaMostrar(item.montoCobrado, 'USD', item.monedaCobro), item.monedaCobro)}</span>
                                 {esPendiente && (
                                     <div className="mt-1 pt-1 border-t border-slate-800/50">
                                         <p className="text-[10px] text-rose-400 font-bold uppercase">Falta pagar</p>
                                         <span className="font-mono font-bold text-rose-400 text-lg">
-                                            {formatDinero(convertirParaMostrar(item.montoAdeudadoRestante !== undefined ? item.montoAdeudadoRestante : item.montoCobrado, 'USD'))}
+                                            {formatDinero(convertirParaMostrar(item.montoAdeudadoRestante !== undefined ? item.montoAdeudadoRestante : item.montoCobrado, 'USD', item.monedaCobro), item.monedaCobro)}
                                         </span>
                                     </div>
                                 )}
@@ -1408,7 +1436,7 @@
 
                               {panelCobroReparacion.idReparacion === item.id && (
                                   <div className="bg-slate-900 p-3 rounded-xl border border-cyan-500/50 flex flex-col gap-2 fade-in w-full md:min-w-[200px]">
-                                    <p className="text-[10px] text-cyan-400 font-bold uppercase">Monto que entrega el cliente:</p>
+                                    <p className="text-[10px] text-cyan-400 font-bold uppercase">Monto Físico Entregado:</p>
                                     <div className="flex gap-2">
                                       <input type="number" step="any" placeholder="Ej: 50000" value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white font-mono" />
                                       <select value={panelCobroReparacion.monedaPago} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, monedaPago: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
@@ -1470,22 +1498,26 @@
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
                           </div>
                           <div className="text-right">
-                            <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
+                            <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda), item.moneda)}</span>
                           </div>
                         </div>
 
                         {pagoDeudaActivo.idDeuda === item.id ? (
                           <div className="bg-slate-900 p-4 rounded-xl border border-emerald-500/50 flex flex-col gap-3 fade-in">
                             <div className="flex gap-2">
-                              <input type="number" step="any" placeholder="Monto" value={pagoDeudaActivo.montoAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, montoAbono: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
+                              <input type="number" step="any" placeholder="Monto entregado físico" value={pagoDeudaActivo.montoAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, montoAbono: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
+                              <select value={pagoDeudaActivo.monedaAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, monedaAbono: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
+                                <option value="ARS">ARS</option>
+                                <option value="USD">USD</option>
+                              </select>
                               <select value={pagoDeudaActivo.walletId} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
                                 <option value="">¿De qué billetera sale?</option>
                                 {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                               </select>
                             </div>
                             <div className="flex gap-2">
-                              <button onClick={() => procesarPagoDeuda(item)} className="flex-1 bg-emerald-600 text-white font-bold py-2 rounded-lg">Confirmar Pago</button>
-                              <button onClick={() => setPagoDeudaActivo({idDeuda: null, walletId: '', montoAbono: ''})} className="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold">Cancelar</button>
+                              <button onClick={() => procesarPagoDeudaLibre(item)} className="flex-1 bg-emerald-600 text-white font-bold py-2 rounded-lg">Confirmar Pago</button>
+                              <button onClick={() => setPagoDeudaActivo({idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS'})} className="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold">Cancelar</button>
                             </div>
                           </div>
                         ) : (
@@ -1497,7 +1529,7 @@
                                   guardarEnNube({...db, deudas: db.deudas.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                               }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: item.monto })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">Abonar</button>
+                            <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: item.monto, monedaAbono: item.moneda })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">Abonar</button>
                           </div>
                         )}
                       </div>
@@ -1547,7 +1579,7 @@
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
                           </div>
                           <div className="text-right">
-                            <span className="font-mono font-black text-emerald-400 text-2xl">+{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
+                            <span className="font-mono font-black text-emerald-400 text-2xl">+{formatDinero(convertirParaMostrar(item.monto, item.moneda), item.moneda)}</span>
                             <div className="mt-2"><span className={`font-mono font-bold text-xs border border-slate-700 rounded px-2 py-1 ${colorDias}`}>Hace {diasPasados} días</span></div>
                           </div>
                         </div>
@@ -1555,16 +1587,16 @@
                         {cobroDeudaActivo.idDeuda === item.id ? (
                           <div className="bg-slate-900 p-4 rounded-xl border border-indigo-500/50 flex flex-col gap-3 fade-in">
                             <div className="flex gap-2">
-                              <input type="number" step="any" placeholder="Monto que te dio" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
+                              <input type="number" step="any" placeholder="Monto entregado físico" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
                               <select value={cobroDeudaActivo.monedaCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, monedaCobro: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
                                 <option value="ARS">ARS</option>
                                 <option value="USD">USD</option>
                               </select>
-                            </div>
-                            <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white">
-                                <option value="">¿A qué billetera entró la plata?</option>
+                              <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
+                                <option value="">¿A qué billetera entró?</option>
                                 {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
-                            </select>
+                              </select>
+                            </div>
                             <div className="flex gap-2">
                               <button onClick={() => procesarCobroDeudaLibre(item)} className="flex-1 bg-indigo-600 text-white font-bold py-2 rounded-lg">Confirmar Ingreso</button>
                               <button onClick={() => setCobroDeudaActivo({idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS'})} className="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold">Cancelar</button>
