@@ -42,9 +42,6 @@
       }
     }
 
-    // ==========================================
-    // 1. CONEXIÓN A BASE DE DATOS
-    // ==========================================
     const SUPABASE_URL = "https://nbluvlbsuvmkcaflmjei.supabase.co";
     const SUPABASE_KEY = "sb_publishable_IuVcRy48mLa5P02gRC7B_Q_tI3C6Wuk";
     
@@ -72,13 +69,12 @@
       const [db, setDb] = useState(DB_TEMPLATE);
       const [vista, setVista] = useState('patrimonio'); 
 
-      // ESTADOS GLOBALES DE LA APP
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      // ESTADOS DE FORMULARIOS PATRIMONIALES Y VENTAS
+      // ESTADOS DE FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
@@ -93,9 +89,9 @@
       // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
       
-      const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '' });
+      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+      const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS' });
 
       // ESTADOS UI DE MODALES
       const [editandoDolar, setEditandoDolar] = useState(false);
@@ -212,14 +208,14 @@
       // FUNCIONES DE LIMPIEZA
       // ==========================================
       const limpiarHistoriaConceptos = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos?")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
           guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
       };
 
       const limpiarHistoriaStock = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos?")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
           guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
@@ -339,14 +335,11 @@
         if (!nuevoGastoPuntual.walletId || !nuevoGastoPuntual.concepto) return alert('Completá los datos.');
         const operacion = procesarDescuentoSeguro(nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda, db.activos);
         if (!operacion.success) return alert(operacion.msg); 
-        
         const walletUsada = db.activos.find(w => w.id === parseInt(nuevoGastoPuntual.walletId));
         const conceptoTrim = nuevoGastoPuntual.concepto.trim();
         const item = { id: Date.now(), concepto: conceptoTrim, monto: parseFloat(nuevoGastoPuntual.monto) || 0, moneda: nuevoGastoPuntual.moneda, fecha: new Date().toLocaleDateString(), pagadoCon: walletUsada?.nombre || 'Desconocido', walletIdOriginal: walletUsada?.id };
-
         const nuevaHistoriaConceptos = [...new Set([conceptoTrim, ...(db.historiaConceptos || [])])];
         const log = generarLog('Creó Gasto Suelto', `Registró gasto en "${item.concepto}" por ${item.monto} ${item.moneda}. Pagado con ${item.pagadoCon}.`, item);
-
         guardarEnNube({ ...db, activos: operacion.activosActualizados, gastosPuntuales: [item, ...(db.gastosPuntuales || [])], historiaConceptos: nuevaHistoriaConceptos, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevoGastoPuntual({ concepto: '', monto: '', moneda: 'ARS', walletId: nuevoGastoPuntual.walletId });
         setMostrarInputConceptoLibre(false);
@@ -615,7 +608,6 @@
           }
       };
 
-      // FINALIZAR REPARACIÓN (CON AUTOCOMPLETADO LIBRE Y MULTIMONEDA EN VIVO)
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto a cobrar.');
@@ -629,7 +621,7 @@
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
               equipoOriginal: equipo, montoCobrado: montoFin, monedaCobro: nuevaReparacionFinalizada.monedaCobro,
-              montoAdeudadoRestante: montoFin, // INICIALMENTE DEBE TODO
+              montoAdeudadoRestante: montoFin,
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar'
           };
           
@@ -655,48 +647,59 @@
               dbUpdates.deudasCobrar = deudasCobrarActualizadas;
               log = generarLog('Finalizó Reparación Gremio', `Finalizó ${equipo.modelo} de ${equipo.gremio}. Se sumaron ${montoFin} ${nuevaReparacionFinalizada.monedaCobro} a sus Cuentas por Cobrar.`, registroFin);
           } else {
-              log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}. Quedó pendiente de cobro por ${montoFin} ${nuevaReparacionFinalizada.monedaCobro}.`, registroFin);
+              log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}. Quedó pendiente de pago por ${montoFin} ${nuevaReparacionFinalizada.monedaCobro}.`, registroFin);
           }
 
           guardarEnNube({ ...db, ...dbUpdates, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
       };
 
-      // MAGIA 2: COBRO PARCIAL (MULTIBILLETERA Y MULTIMONEDA)
+      // MAGIA: COBRO PARCIAL (MULTIBILLETERA Y MULTIMONEDA)
       const cobrarReparacionClienteParcial = (e, itemReparacion) => {
           e.preventDefault();
-          if (!panelCobroReparacion.walletId || !panelCobroReparacion.montoCobro) return alert('Elegí a qué billetera entra la plata y cuánto te dio.');
+          if (!panelCobroReparacion.walletId || !panelCobroReparacion.montoCobro) return alert('Elegí a qué billetera entra la plata y cuánto te dio el cliente.');
           
-          const montoQueDaElCliente = parseFloat(panelCobroReparacion.montoCobro);
-          if (montoQueDaElCliente <= 0) return alert('Monto inválido.');
+          const montoEntregadoFisico = parseFloat(panelCobroReparacion.montoCobro);
+          if (montoEntregadoFisico <= 0) return alert('Monto inválido.');
+          
+          const monedaEntregada = panelCobroReparacion.monedaPago;
+          const monedaDeuda = itemReparacion.monedaCobro;
+          
+          let montoAImputarEnDeuda = montoEntregadoFisico;
+          if (monedaEntregada === 'ARS' && monedaDeuda === 'USD') montoAImputarEnDeuda = montoEntregadoFisico / db.cotizacionDolar;
+          if (monedaEntregada === 'USD' && monedaDeuda === 'ARS') montoAImputarEnDeuda = montoEntregadoFisico * db.cotizacionDolar;
 
-          // Asumimos que el cliente te entrega la plata en la misma moneda en la que cerraste el presupuesto para no enroscar
-          const monedaDePago = itemReparacion.monedaCobro; 
-          const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, montoQueDaElCliente, monedaDePago, db.activos);
+          const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? parseFloat(itemReparacion.montoAdeudadoRestante) : parseFloat(itemReparacion.montoCobrado);
           
-          const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? itemReparacion.montoAdeudadoRestante : itemReparacion.montoCobrado;
-          const nuevoRestante = parseFloat(adeudadoActual) - montoQueDaElCliente;
+          const nuevoRestante = adeudadoActual - montoAImputarEnDeuda;
           
-          if (nuevoRestante < -0.05) return alert('El cliente te está entregando más plata de la que te debe por esta reparación.');
+          if (nuevoRestante < -0.05) {
+              return alert(`Estás cobrando de más. El cliente debe el equivalente a ${adeudadoActual.toFixed(2)} ${monedaDeuda}. Revisá el monto o la moneda de pago que pusiste.`);
+          }
 
+          const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, montoEntregadoFisico, monedaEntregada, db.activos);
+          
+          const estadoFinal = nuevoRestante <= 0.05 ? 'cobrado' : 'pendiente';
           const reparacionesFinActualizadas = (db.reparacionesFin || []).map(r => {
               if (r.id === itemReparacion.id) {
-                  const estadoFinal = nuevoRestante <= 0.05 ? 'cobrado' : 'pendiente';
                   return { ...r, montoAdeudadoRestante: nuevoRestante, estadoCobro: estadoFinal };
               }
               return r;
           });
 
           const walletUsada = activosConCobro.find(w => w.id === parseInt(panelCobroReparacion.walletId))?.nombre;
-          const estadoLog = nuevoRestante <= 0.05 ? 'Canceló el total.' : `Aún te debe ${nuevoRestante.toFixed(2)} ${monedaDePago}.`;
-          const log = generarLog('Cobró Reparación Cliente', `Recibió un pago de ${montoQueDaElCliente} ${monedaDePago} por el ${itemReparacion.equipoOriginal.modelo}. ${estadoLog} Entró a: ${walletUsada}.`);
+          const logMsg = estadoFinal === 'cobrado' 
+              ? `Canceló saldo total. Entregó ${montoEntregadoFisico} ${monedaEntregada} en ${walletUsada}.` 
+              : `Abonó seña. Entregó ${montoEntregadoFisico} ${monedaEntregada} en ${walletUsada}. Restan cobrar ${nuevoRestante.toFixed(2)} ${monedaDeuda}.`;
+              
+          const log = generarLog('Cobró Reparación Cliente', `[${itemReparacion.equipoOriginal.modelo}]: ${logMsg}`);
 
           guardarEnNube({ ...db, activos: activosConCobro, reparacionesFin: reparacionesFinActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setPanelCobroReparacion({ idReparacion: null, walletId: '', montoCobro: '' });
+          setPanelCobroReparacion({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS' });
       };
 
       const eliminarReparacionHistorial = (itemRep) => {
-          if (window.confirm("¿Seguro querés eliminar este registro histórico? OJO: Si ya le habías cobrado algo, esto NO restará la plata de tus cuentas, solo borrará el papel virtual.")) {
+          if (window.confirm("¿Seguro querés eliminar este registro histórico? OJO: Si ya lo cobraste, esto NO restará la plata de tus cuentas, solo borrará el papel virtual.")) {
               const log = generarLog('Eliminó Historial de Reparación', `Borró el historial del ${itemRep.equipoOriginal.modelo}.`);
               guardarEnNube({ ...db, reparacionesFin: db.reparacionesFin.filter(v => v.id !== itemRep.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           }
@@ -715,9 +718,8 @@
       const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
       const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
       
-      // La Ganancia Real de reparaciones suma SOLO la plata que ya te entregaron en mano. (Cobro Total - Lo que te deben todavía)
       const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
-          const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0; 
+          const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
           const cobradoReal = parseFloat(item.montoCobrado) - adeudado;
           const enUSD = item.monedaCobro === 'USD' ? cobradoReal : cobradoReal / db.cotizacionDolar;
           return acc + (enUSD > 0 ? enUSD : 0);
@@ -790,14 +792,11 @@
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setVista('patrimonio')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'patrimonio' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-scale-balanced w-5 text-center"></i> Patrimonio Real</button>
               <button onClick={() => setVista('gastos')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'gastos' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-chart-pie w-5 text-center"></i> Gastos y Análisis</button>
-              
               <button onClick={() => setVista('ventas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'ventas' ? 'bg-emerald-500 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-cash-register w-5 text-center"></i> Ventas de Equipos</button>
               <button onClick={() => setVista('taller')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'taller' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-microchip w-5 text-center"></i> Taller Ingresos</button>
               <button onClick={() => setVista('reparacionesFin')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'reparacionesFin' ? 'bg-cyan-700 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-clipboard-check w-5 text-center"></i> Reparaciones Histórico</button>
-              
               <button onClick={() => setVista('cobrar')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'cobrar' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-hand-holding-dollar w-5 text-center"></i> Cuentas a Cobrar</button>
               <button onClick={() => setVista('deudas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'deudas' ? 'bg-rose-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-handshake w-5 text-center"></i> Deudas a Otros</button>
-              
               <button onClick={() => setVista('stock')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border-t border-slate-800/50 pt-6 ${vista === 'stock' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-boxes-stacked w-5 text-center"></i> Stock Repuestos</button>
               <button onClick={() => setVista('actividad')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-shield-halved w-5 text-center text-indigo-400"></i> Auditoría (Logs)</button>
             </nav>
@@ -923,7 +922,7 @@
                             {item.nombre} 
                             {(!item.tipo || item.tipo === 'billetera') ? <i className="fa-solid fa-money-bill-1-wave text-xs text-emerald-400 bg-emerald-950 px-2 py-1 rounded"></i> : <i className="fa-solid fa-cube text-xs text-amber-400 bg-amber-950 px-2 py-1 rounded"></i>}
                           </p>
-                          {!modoPrivado && <p className="text-xs text-slate-500 font-mono mt-1">Cargado en moneda base: {item.monto} {item.moneda}</p>}
+                          {!modoPrivado && <p className="text-xs text-slate-500 font-mono mt-1">Cargado: {item.monto} {item.moneda}</p>}
                         </div>
                         <div className="w-full md:w-auto flex items-center justify-between gap-4">
                           <span className="font-mono font-black text-blue-400 text-xl">{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
@@ -1256,12 +1255,13 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (CON AUTOCOMPLETADO LIBRE Y MULTIMONEDA EN VIVO) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS (CON COBRO PARCIAL) */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-clipboard-check mr-2"></i>Histórico Ganancias de Taller</p>
                   <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalGananciaReparacionesUSD, 'USD'))}</h2>
+                  <p className="text-slate-400 text-xs font-mono mt-3">Refleja lo que efectivamente ya te pagaron.</p>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
@@ -1279,7 +1279,6 @@
                                 return;
                             }
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
-                            // Autocompleta pero deja las cajas libres para edición directa
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
                             } else {
@@ -1292,9 +1291,8 @@
                     </div>
 
                     <div>
-                        <label className="text-xs text-slate-400 font-bold block mb-1">Monto a Cobrar (Ganancia final)</label>
+                        <label className="text-xs text-slate-400 font-bold block mb-1">Precio Final a Cobrarle (Caja libre y conversor automático)</label>
                         <div className="flex">
-                            {/* Convertidor automático de moneda al tipear (Caja libre) */}
                             <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
                             <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
                                 const nuevaMoneda = e.target.value;
@@ -1317,6 +1315,7 @@
                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Historial de Reparaciones Finalizadas</h4>
                     {(db.reparacionesFin || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.reparacionesFin || []).map(item => {
                         const esPendiente = item.estadoCobro === 'pendiente';
+                        
                         return (
                           <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                             <div className="flex-1 w-full">
@@ -1338,32 +1337,47 @@
                               </div>
                             </div>
                             
-                            <div className="flex flex-col items-end gap-3 min-w-[150px]">
-                              <div className="text-right">
+                            <div className="flex flex-col items-end gap-3 min-w-[150px] w-full md:w-auto">
+                              <div className="text-right w-full">
+                                <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Precio Total</p>
                                 <span className="font-mono font-black text-cyan-400 text-2xl">{formatDinero(convertirParaMostrar(item.montoCobrado, item.monedaCobro))}</span>
+                                {esPendiente && (
+                                    <div className="mt-1 pt-1 border-t border-slate-800/50">
+                                        <p className="text-[10px] text-rose-400 font-bold uppercase">Falta pagar</p>
+                                        <span className="font-mono font-bold text-rose-400 text-lg">
+                                            {formatDinero(convertirParaMostrar(item.montoAdeudadoRestante !== undefined ? item.montoAdeudadoRestante : item.montoCobrado, item.monedaCobro))}
+                                        </span>
+                                    </div>
+                                )}
                               </div>
 
-                              {/* PAGO PARCIAL DEL CLIENTE */}
                               {esPendiente && panelCobroReparacion.idReparacion !== item.id && (
-                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '', montoCobro: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Abonar / Cobrar</button>
+                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '', montoCobro: '', monedaPago: 'ARS' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Ingresar Pago</button>
                               )}
 
                               {panelCobroReparacion.idReparacion === item.id && (
-                                  <div className="bg-slate-900 p-3 rounded-xl border border-cyan-500/50 flex flex-col gap-2 fade-in w-full">
-                                    <input type="number" step="any" placeholder={`Entregó en ${item.monedaCobro}`} value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500" />
-                                    <select value={panelCobroReparacion.walletId} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-cyan-500">
+                                  <div className="bg-slate-900 p-3 rounded-xl border border-cyan-500/50 flex flex-col gap-2 fade-in w-full md:min-w-[200px]">
+                                    <p className="text-[10px] text-cyan-400 font-bold uppercase">Monto que entrega el cliente:</p>
+                                    <div className="flex gap-2">
+                                      <input type="number" step="any" placeholder="Ej: 50000" value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white font-mono" />
+                                      <select value={panelCobroReparacion.monedaPago} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, monedaPago: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
+                                        <option value="ARS">ARS</option>
+                                        <option value="USD">USD</option>
+                                      </select>
+                                    </div>
+                                    <select value={panelCobroReparacion.walletId} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white">
                                       <option value="">¿A qué billetera entró?</option>
                                       {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                                     </select>
-                                    <div className="flex gap-2">
-                                      <button onClick={(e) => cobrarReparacionClienteParcial(e, item)} className="flex-1 bg-emerald-600 text-white font-bold px-2 py-2 rounded-lg text-xs">Confirmar</button>
-                                      <button onClick={() => setPanelCobroReparacion({idReparacion: null, walletId: '', montoCobro: ''})} className="bg-slate-800 text-white px-2 py-2 rounded-lg text-xs">X</button>
+                                    <div className="flex gap-2 mt-1">
+                                      <button onClick={(e) => cobrarReparacionClienteParcial(e, item)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-2 rounded-lg text-xs transition">Confirmar</button>
+                                      <button onClick={() => setPanelCobroReparacion({idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS'})} className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-700">X</button>
                                     </div>
                                   </div>
                               )}
 
                               {!esPendiente && (
-                                  <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-3 py-2 rounded-lg transition-colors text-xs"><i className="fa-solid fa-trash"></i> Eliminar Registro</button>
+                                  <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-3 py-2 rounded-lg transition-colors text-xs"><i className="fa-solid fa-trash"></i> Borrar Registro</button>
                               )}
                             </div>
                           </div>
