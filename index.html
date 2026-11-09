@@ -57,7 +57,7 @@
         cotizacionDolar: 1500, fechaUltimaCotizacion: '',
         activos: [], gastosFijos: [], gastosPuntuales: [], 
         deudas: [], deudasCobrar: [], 
-        stock: [], ventas: [], // NUEVO: Módulo ventas
+        stock: [], ventas: [], 
         historiaConceptos: [], historiaStock: [], actividad: [] 
     };
 
@@ -72,7 +72,7 @@
       const [db, setDb] = useState(DB_TEMPLATE);
       const [vista, setVista] = useState('patrimonio'); 
 
-      // ESTADOS DE LA APP
+      // ESTADOS DE LA APP (PRIVACIDAD Y MONEDA GLOBAL)
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
@@ -87,8 +87,6 @@
       const [nuevaDeudaCobrar, setNuevaDeudaCobrar] = useState({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' }); 
       const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
-      
-      // NUEVO: ESTADO DE VENTAS
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
       // ESTADOS UI
@@ -104,7 +102,6 @@
       const [editandoDeudaCobrar, setEditandoDeudaCobrar] = useState(null); 
       const [editandoStock, setEditandoStock] = useState(null);
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
-      
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       // ESTADOS DE AUDITORÍA
@@ -185,6 +182,9 @@
           setBloqueoCotizacion(false);
       };
 
+      // ==========================================
+      // FUNCIONES DE CONVERSIÓN Y VISUALIZACIÓN
+      // ==========================================
       const convertirParaMostrar = (montoBase, monedaBase) => {
           const val = parseFloat(montoBase) || 0;
           if (monedaVisual === 'USD') return monedaBase === 'USD' ? val : val / db.cotizacionDolar;
@@ -204,7 +204,24 @@
       };
 
       // ==========================================
-      // ASISTENTE INTELIGENTE
+      // CORRECCIÓN: FUNCIONES DE LIMPIEZA
+      // ==========================================
+      const limpiarHistoriaConceptos = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
+          guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      const limpiarHistoriaStock = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
+          guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      // ==========================================
+      // MOTOR DEL ASISTENTE INTELIGENTE
       // ==========================================
       useEffect(() => { if(chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [chatAsistente, vista]);
 
@@ -311,6 +328,25 @@
         }
       };
 
+      const procesarEdicionGastoPuntual = (e) => {
+        e.preventDefault();
+        const gastoOriginal = db.gastosPuntuales.find(g => g.id === editandoGastoPuntual.id);
+        const activosReembolsados = procesarReembolsoWallet(gastoOriginal.walletIdOriginal, gastoOriginal.monto, gastoOriginal.moneda, db.activos);
+        const operacionNuevoDescuento = procesarDescuentoSeguro(editandoGastoPuntual.walletIdOriginal, editandoGastoPuntual.monto, editandoGastoPuntual.moneda, activosReembolsados);
+        
+        if (!operacionNuevoDescuento.success) { return alert(operacionNuevoDescuento.msg + " (El gasto original no se modificó)."); }
+
+        const nombreWalletNueva = operacionNuevoDescuento.activosActualizados.find(w => w.id === parseInt(editandoGastoPuntual.walletIdOriginal))?.nombre;
+        const gastosPuntualesActualizados = db.gastosPuntuales.map(g => {
+            if (g.id === editandoGastoPuntual.id) return { ...g, concepto: editandoGastoPuntual.concepto, monto: parseFloat(editandoGastoPuntual.monto), moneda: editandoGastoPuntual.moneda, walletIdOriginal: parseInt(editandoGastoPuntual.walletIdOriginal), pagadoCon: nombreWalletNueva };
+            return g;
+        });
+
+        const log = generarLog('Editó Gasto Suelto', `Editó gasto de "${gastoOriginal.concepto}" a "${editandoGastoPuntual.concepto}". Modificó monto de ${gastoOriginal.monto} a ${editandoGastoPuntual.monto}.`, { original: gastoOriginal, nuevo: editandoGastoPuntual });
+        guardarEnNube({ ...db, activos: operacionNuevoDescuento.activosActualizados, gastosPuntuales: gastosPuntualesActualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setEditandoGastoPuntual(null);
+      };
+
       const agregarGastoFijo = (e) => {
         e.preventDefault();
         const item = { 
@@ -333,12 +369,11 @@
         });
         const walletUsada = operacion.activosActualizados.find(w => w.id === parseInt(pagoActivo.walletId))?.nombre;
         const log = generarLog('Efectuó Pago (Fijo/Cuota)', `Pagó "${itemFijo.concepto}" (${itemFijo.monto} ${itemFijo.moneda}) desde la billetera ${walletUsada}.`, itemFijo);
-
         guardarEnNube({ ...db, activos: operacion.activosActualizados, gastosFijos: gastosFijosActualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
-      // --- DEUDAS (HACIA OTROS) CON MOTIVO ---
+      // --- DEUDAS (HACIA OTROS) ---
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
@@ -379,7 +414,7 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
       };
 
-      // --- DEUDAS HACIA MÍ (COBRAR) CON MOTIVO ---
+      // --- DEUDAS HACIA MÍ (COBRAR) ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -401,7 +436,6 @@
           deudasCobrarActualizadas.unshift(item);
           log = generarLog('Creó Cuenta a Cobrar', `Prestó ${item.monto} ${item.moneda} a "${item.deudor}". Motivo: ${item.motivo}`, item);
         }
-
         guardarEnNube({ ...db, activos: operacion.activosActualizados, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
       };
@@ -414,7 +448,6 @@
         const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobro, itemDeuda.moneda, db.activos);
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - cobro;
         let deudasCobrarActualizadas = [];
-        
         if (nuevoMontoDeuda <= 0.05) deudasCobrarActualizadas = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
         else deudasCobrarActualizadas = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
 
@@ -425,9 +458,18 @@
         setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '' });
       };
 
-      // --- STOCK ---
+      // CORRECCIÓN: ELIMINAR DEUDA A COBRAR
+      const eliminarDeudaCobrar = (itemDeuda) => {
+        if(window.confirm(`¿Estás seguro de eliminar la deuda de ${itemDeuda.deudor} sin recuperar la plata a ninguna billetera? (Se asume incobrable)`)){
+            const log = generarLog('Eliminó Cuenta a Cobrar', `Borró la deuda de "${itemDeuda.deudor}" por ${itemDeuda.monto} ${itemDeuda.moneda} sin ingresarlo a billeteras (Incobrable).`, itemDeuda);
+            guardarEnNube({ ...db, deudasCobrar: (db.deudasCobrar || []).filter(x => x.id !== itemDeuda.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        }
+      };
+
+      // --- VENTAS Y STOCK ---
       const agregarStock = (e) => {
         e.preventDefault();
+        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -459,27 +501,16 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
-      // --- NUEVO: HANDLERS DE VENTAS / COMISIONES ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
           const comisionUnitaria = parseFloat(nuevaVenta.comisionPorUnidad) || 0;
           const totalComision = cantidad * comisionUnitaria;
-
           if (totalComision <= 0) return alert('La comisión total debe ser mayor a cero.');
 
-          // 1. Guardar registro en módulo Ventas
-          const registroVenta = {
-              id: Date.now(),
-              fecha: new Date().toLocaleDateString(),
-              cantidad,
-              comisionUnitaria,
-              totalComision,
-              moneda: nuevaVenta.moneda
-          };
+          const registroVenta = { id: Date.now(), fecha: new Date().toLocaleDateString(), cantidad, comisionUnitaria, totalComision, moneda: nuevaVenta.moneda };
           const ventasActualizadas = [registroVenta, ...(db.ventas || [])];
 
-          // 2. Acumular en Cuentas a Cobrar (Deudas a mi favor) bajo el nombre "Comisiones Pendientes"
           let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
           const acreedorComisiones = "Comisiones Pendientes";
           const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === acreedorComisiones && d.moneda === nuevaVenta.moneda);
@@ -488,17 +519,11 @@
               deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + totalComision).toFixed(2);
           } else {
               const itemCobrar = {
-                  id: Date.now() + 1, // Para que no choque con el ID de la venta
-                  deudor: acreedorComisiones,
-                  motivo: "Acumulado de ventas de dispositivos",
-                  monto: totalComision.toFixed(2),
-                  moneda: nuevaVenta.moneda,
-                  fecha: new Date().toLocaleDateString()
+                  id: Date.now() + 1, deudor: acreedorComisiones, motivo: "Acumulado de ventas de dispositivos",
+                  monto: totalComision.toFixed(2), moneda: nuevaVenta.moneda, fecha: new Date().toLocaleDateString()
               };
               deudasCobrarActualizadas.unshift(itemCobrar);
           }
-
-          // 3. Generar Log de Auditoría
           const log = generarLog('Registró Venta de Teléfonos', `Vendió ${cantidad} equipos. Comisión total acumulada para cobrar: ${totalComision.toFixed(2)} ${nuevaVenta.moneda}.`, registroVenta);
 
           guardarEnNube({ ...db, ventas: ventasActualizadas, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -510,7 +535,7 @@
               const log = generarLog('Eliminó Registro de Venta', `Borró el historial de venta del ${itemVenta.fecha} por ${itemVenta.totalComision} ${itemVenta.moneda}.`);
               guardarEnNube({ ...db, ventas: db.ventas.filter(v => v.id !== itemVenta.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           }
-      }
+      };
 
       // --- CÁLCULOS TOTALES DASHBOARD ---
       const totalBilleterasUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -518,11 +543,9 @@
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
       const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalDeudasCobrarUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
-      
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       
-      // Ventas Históricas
       const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
       const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
 
@@ -627,7 +650,7 @@
                 <i className="fa-solid fa-boxes-stacked w-5 text-center"></i> Stock Repuestos
               </button>
               <button onClick={() => setVista('actividad')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <i className="fa-solid fa-shield-halved w-5 text-center"></i> Auditoría (Logs)
+                <i className="fa-solid fa-shield-halved w-5 text-center text-indigo-400"></i> Auditoría (Logs)
               </button>
             </nav>
 
@@ -668,14 +691,11 @@
               </div>
             </div>
 
-            {/* ===================================================== */}
-            {/* VISTA 1: PATRIMONIO EXCLUSIVO                         */}
-            {/* ===================================================== */}
+            {/* VISTA 1: PATRIMONIO EXCLUSIVO */}
             {vista === 'patrimonio' && (
               <div className="max-w-6xl mx-auto space-y-8 pb-20 fade-in">
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  
                   <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl lg:col-span-3 xl:col-span-1">
                     <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
                     <h2 className={`text-4xl font-black ${patrimonioNetoRealUSD >= 0 ? 'text-white' : 'text-rose-400'}`}>
@@ -707,7 +727,6 @@
                     <h2 className="text-3xl font-black text-indigo-400">{formatDinero(convertirParaMostrar(totalDeudasCobrarUSD, 'USD'))}</h2>
                     <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Cuentas por Cobrar a otros</p>
                   </div>
-
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl max-w-4xl mx-auto">
@@ -755,12 +774,9 @@
               </div>
             )}
 
-            {/* ===================================================== */}
-            {/* VISTA 2: GASTOS Y ANÁLISIS                            */}
-            {/* ===================================================== */}
+            {/* VISTA 2: GASTOS Y ANÁLISIS */}
             {vista === 'gastos' && (
               <div className="max-w-6xl mx-auto space-y-8 pb-20 fade-in">
-                
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex justify-between items-center">
                     <div>
@@ -940,9 +956,7 @@
               </div>
             )}
 
-            {/* ===================================================== */}
-            {/* VISTA 3: VENTAS Y COMISIONES (NUEVO MÓDULO)           */}
-            {/* ===================================================== */}
+            {/* VISTA 3: VENTAS Y COMISIONES */}
             {vista === 'ventas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -998,9 +1012,7 @@
               </div>
             )}
 
-            {/* ===================================================== */}
-            {/* VISTA 4: DEUDAS A OTROS (Con Motivo)                  */}
-            {/* ===================================================== */}
+            {/* VISTA 4: DEUDAS A OTROS */}
             {vista === 'deudas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1078,9 +1090,7 @@
               </div>
             )}
 
-            {/* ===================================================== */}
-            {/* VISTA 5: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO          */}
-            {/* ===================================================== */}
+            {/* VISTA 5: DEUDAS HACIA MÍ (COBRAR) */}
             {vista === 'cobrar' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1168,9 +1178,7 @@
               </div>
             )}
 
-            {/* ===================================================== */}
-            {/* VISTA 6: STOCK / NEGOCIO                              */}
-            {/* ===================================================== */}
+            {/* VISTA 6: STOCK / NEGOCIO */}
             {vista === 'stock' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1222,7 +1230,7 @@
                         
                         <div className="flex-1 w-full flex justify-between items-center md:block">
                           <p className="font-bold text-white text-base">{item.concepto}</p>
-                          {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Costo Unitario Base: {item.monto} {item.moneda}</p>}
+                          {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Costo Original: {item.monto} {item.moneda}</p>}
                         </div>
 
                         <div className="flex items-center gap-4">
@@ -1248,9 +1256,7 @@
               </div>
             )}
 
-            {/* ===================================================== */}
-            {/* VISTA 7: AUDITORÍA CON ASISTENTE                      */}
-            {/* ===================================================== */}
+            {/* VISTA 7: AUDITORÍA CON ASISTENTE */}
             {vista === 'actividad' && (
               <div className="max-w-6xl mx-auto space-y-6 pb-20 fade-in">
                 
@@ -1413,7 +1419,7 @@
                     <input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Precio Original de la Cuota</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Precio de la Cuota</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoFijo.monto} onChange={e => setEditandoFijo({...editandoFijo, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoFijo.moneda} onChange={e => setEditandoFijo({...editandoFijo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1448,7 +1454,7 @@
                     <input type="text" required value={editandoDeuda.motivo} onChange={e => setEditandoDeuda({...editandoDeuda, motivo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente (Moneda Original)</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeuda.monto} onChange={e => setEditandoDeuda({...editandoDeuda, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoDeuda.moneda} onChange={e => setEditandoDeuda({...editandoDeuda, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1483,7 +1489,7 @@
                     <input type="text" required value={editandoDeudaCobrar.motivo} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, motivo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto a Cobrar (Moneda Original)</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto a Cobrar</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeudaCobrar.monto} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoDeudaCobrar.moneda} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1514,7 +1520,7 @@
                     <input type="text" required value={editandoStock.concepto} onChange={e => setEditandoStock({...editandoStock, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario (Moneda Original)</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoStock.monto} onChange={e => setEditandoStock({...editandoStock, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoStock.moneda} onChange={e => setEditandoStock({...editandoStock, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1539,7 +1545,7 @@
                     <input type="text" required value={editandoGastoPuntual.concepto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto (Moneda Original)</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoGastoPuntual.monto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoGastoPuntual.moneda} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
