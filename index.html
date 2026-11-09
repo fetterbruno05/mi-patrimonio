@@ -115,7 +115,7 @@
       const [filtroDesde, setFiltroDesde] = useState('');
       const [filtroHasta, setFiltroHasta] = useState('');
       const [consultaAsistente, setConsultaAsistente] = useState('');
-      const [chatAsistente, setChatAsistente] = useState([{ emisor: 'bot', texto: '¡Hola! Soy tu asistente de auditoría. Preguntame por ej: "qué gastos agregué ayer", o "movimientos de stock de hoy".' }]);
+      const [chatAsistente, setChatAsistente] = useState([{ emisor: 'bot', texto: '¡Hola! Soy tu asistente de auditoría. Preguntame por ej: "qué gastos agregué ayer", o "movimientos de stock".' }]);
       const chatEndRef = useRef(null);
 
       const generarLog = (accion, detalle, datosExtra = null) => {
@@ -142,15 +142,12 @@
                 gastosFijos: Array.isArray(data.payload.gastosFijos) ? data.payload.gastosFijos.filter(Boolean) : [],
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
                 deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
-                
-                // MIGRACIÓN INTERNA: Forzar que deudasCobrar siempre use USD internamente para unificar saldos
                 deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean).map(d => {
                     if(d.moneda !== 'USD'){
-                        return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(4), moneda: 'USD' }; // Más precisión interna
+                        return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(4), moneda: 'USD' };
                     }
                     return d;
                 }) : [],
-
                 stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean) : [],
                 ventas: Array.isArray(data.payload.ventas) ? data.payload.ventas.filter(Boolean) : [],
                 taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [],
@@ -202,7 +199,6 @@
       // ==========================================
       const redondear = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
 
-      // Helper estricto interno para llevar TODO a USD dentro de la base de datos
       const aUSDBase = (monto, moneda, coti) => {
           const val = parseFloat(monto) || 0;
           return moneda === 'USD' ? val : (val / coti);
@@ -215,7 +211,6 @@
           if (monedaObjetivo === 'USD') {
               return monedaBase === 'USD' ? redondear(val) : redondear(val / db.cotizacionDolar);
           } else {
-              // Convertir a ARS: Siempre sin centavos para la UI
               return monedaBase === 'ARS' ? Math.round(val) : Math.round(val * db.cotizacionDolar);
           }
       };
@@ -228,7 +223,6 @@
           if (monedaFinal === 'USD') {
               return `U$D ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
           } else {
-              // Los pesos se muestran redondos, sin decimales (.00)
               return `$ ${Math.round(val).toLocaleString('es-AR')} ARS`;
           }
       };
@@ -458,25 +452,22 @@
         const abonoFisicoEntregado = parseFloat(pagoDeudaActivo.montoAbono);
         if (abonoFisicoEntregado <= 0) return alert('Monto inválido.');
 
-        // Convertir la moneda física entregada a la moneda en la que está cargada la tarjeta
         let abonoConvertido = abonoFisicoEntregado;
         if (pagoDeudaActivo.monedaAbono === 'ARS' && itemDeuda.moneda === 'USD') abonoConvertido = abonoFisicoEntregado / db.cotizacionDolar;
         if (pagoDeudaActivo.monedaAbono === 'USD' && itemDeuda.moneda === 'ARS') abonoConvertido = abonoFisicoEntregado * db.cotizacionDolar;
 
-        // Comprobación segura de sobrepago
-        if (redondear(abonoConvertido) > parseFloat(itemDeuda.monto) + 0.05) return alert(`Estás intentando pagar de más. La deuda total es de ${itemDeuda.monto} ${itemDeuda.moneda}.`);
+        if (redondear(abonoConvertido) > parseFloat(itemDeuda.monto) + 0.05) return alert(`Estás intentando pagar de más. La deuda es de ${itemDeuda.monto} ${itemDeuda.moneda}.`);
 
         const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abonoFisicoEntregado, pagoDeudaActivo.monedaAbono, db.activos);
         if (!operacion.success) return alert(operacion.msg); 
 
-        // Restamos en la moneda original de la deuda
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abonoConvertido;
         let deudasActualizadas = [];
         if (nuevoMontoDeuda <= 0.05) deudasActualizadas = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
-        else deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(4) } : d); // Precisión interna
+        else deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(4) } : d);
 
         const walletUsada = operacion.activosActualizados.find(w => w.id === parseInt(pagoDeudaActivo.walletId))?.nombre;
-        const log = generarLog('Abonó a Deuda', `Pagó ${abonoFisicoEntregado} ${pagoDeudaActivo.monedaAbono} a "${itemDeuda.acreedor}" desde ${walletUsada}.`);
+        const log = generarLog('Abonó a Deuda', `Pagó ${abonoFisicoEntregado} ${pagoDeudaActivo.monedaAbono} a "${itemDeuda.acreedor}" desde la billetera ${walletUsada}. Restan ${nuevoMontoDeuda.toFixed(2)} ${itemDeuda.moneda}.`);
 
         guardarEnNube({ ...db, activos: operacion.activosActualizados, deudas: deudasActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
@@ -502,7 +493,7 @@
 
         let log;
         if (idxExistente !== -1) {
-          deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoBaseAguardarEnUSD).toFixed(4); // Alta precisión interna
+          deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoBaseAguardarEnUSD).toFixed(4);
           log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} extra a "${deudasCobrarActualizadas[idxExistente].deudor}". Motivo: ${nuevaDeudaCobrar.motivo}`, deudasCobrarActualizadas[idxExistente]);
         } else {
           const item = { 
@@ -528,7 +519,7 @@
 
         const abonoBaseUSD = aUSDBase(cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.cotizacionDolar);
         
-        if (redondear(abonoBaseUSD) > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
+        if (abonoBaseUSD > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
 
         const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.activos);
         
@@ -587,6 +578,7 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
+      // --- MÓDULO VENTAS (CORREGIDO PARA AGRUPAR POR DÍA) ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
@@ -594,11 +586,23 @@
           const totalComision = cantidad * comisionUnitaria;
           if (totalComision <= 0) return alert('La comisión total debe ser mayor a cero.');
 
-          const registroVenta = { id: Date.now(), fecha: new Date().toLocaleDateString(), cantidad, comisionUnitaria, totalComision, moneda: nuevaVenta.moneda };
-          const ventasActualizadas = [registroVenta, ...(db.ventas || [])];
+          const fechaHoy = new Date().toLocaleDateString();
+          const tsNow = Date.now();
+          
+          let ventasActualizadas = [...(db.ventas || [])];
+          const idxVentaHoy = ventasActualizadas.findIndex(v => v.fecha === fechaHoy && v.moneda === nuevaVenta.moneda);
+
+          let registroVenta;
+          if (idxVentaHoy !== -1) {
+              ventasActualizadas[idxVentaHoy].cantidad = parseInt(ventasActualizadas[idxVentaHoy].cantidad) + cantidad;
+              ventasActualizadas[idxVentaHoy].totalComision = parseFloat(ventasActualizadas[idxVentaHoy].totalComision) + totalComision;
+              registroVenta = ventasActualizadas[idxVentaHoy];
+          } else {
+              registroVenta = { id: tsNow, fechaTimestamp: tsNow, fecha: fechaHoy, cantidad, comisionUnitaria, totalComision, moneda: nuevaVenta.moneda };
+              ventasActualizadas.unshift(registroVenta);
+          }
 
           const totalComisionUSD = aUSDBase(totalComision, nuevaVenta.moneda, db.cotizacionDolar);
-          
           let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
           const acreedorComisiones = "Comisiones de Venta de Equipos";
           const motivoComisiones = "Acumulado de ventas";
@@ -606,24 +610,24 @@
           const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === acreedorComisiones && d.motivo === motivoComisiones);
 
           if (idxExistente !== -1) {
-              deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + totalComisionUSD).toFixed(4); // Alta precisión interna
+              deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + totalComisionUSD).toFixed(4); 
           } else {
               const itemCobrar = {
                   id: Date.now() + 1, fechaTimestamp: Date.now(), deudor: acreedorComisiones, motivo: motivoComisiones,
                   monto: totalComisionUSD.toFixed(4), moneda: 'USD',
-                  fecha: new Date().toLocaleDateString()
+                  fecha: fechaHoy
               };
               deudasCobrarActualizadas.unshift(itemCobrar);
           }
-          const log = generarLog('Registró Venta de Teléfonos', `Vendió ${cantidad} equipos. Comisión acumulada en Cuentas por Cobrar: ${totalComision.toFixed(2)} ${nuevaVenta.moneda}.`, registroVenta);
+          const log = generarLog('Registró Venta de Teléfonos', `Vendió ${cantidad} equipos hoy. Sumó a Cuentas por Cobrar: ${totalComision.toFixed(2)} ${nuevaVenta.moneda}.`, registroVenta);
 
           guardarEnNube({ ...db, ventas: ventasActualizadas, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaVenta({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
       };
 
       const eliminarRegistroVenta = (itemVenta) => {
-          if (window.confirm("¿Seguro querés eliminar este registro de venta? OJO: Esto NO restará la plata de tus Cuentas por Cobrar, solo borrará el historial de esta venta.")) {
-              const log = generarLog('Eliminó Registro de Venta', `Borró el historial de venta del ${itemVenta.fecha} por ${itemVenta.totalComision} ${itemVenta.moneda}.`);
+          if (window.confirm("¿Seguro querés eliminar TODAS las ventas de este día? OJO: Esto NO restará la plata de tus Cuentas por Cobrar, solo borrará el historial visual.")) {
+              const log = generarLog('Eliminó Registro de Venta', `Borró el historial de ventas del día ${itemVenta.fecha}.`);
               guardarEnNube({ ...db, ventas: db.ventas.filter(v => v.id !== itemVenta.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           }
       };
@@ -687,24 +691,18 @@
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
           if (!equipo) return alert('Error: Equipo no encontrado en el taller.');
 
-          // GUARDADO INTERNO: Alta Precisión (Doble guardado)
-          // 1. Guardamos el monto original físico para que la UI lo muestre perfecto (evitamos centavos locos)
+          // GUARDADO INTERNO: Alta Precisión (Doble guardado para evitar desfasaje de centavos)
           const montoFisico = montoFin;
           const monedaFisica = nuevaReparacionFinalizada.monedaCobro;
-          
-          // 2. Guardamos la base en USD para las restas internas
-          const montoBaseUSD = aUSDBase(montoFin, nuevaReparacionFinalizada.monedaCobro, db.cotizacionDolar);
+          const montoBaseUSD = aUSDBase(montoFin, monedaFisica, db.cotizacionDolar);
 
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
               equipoOriginal: equipo, 
-              
-              montoCobradoOriginal: montoFisico, // Lo que el flaco tipeó
+              montoCobradoOriginal: montoFisico, 
               monedaCobroOriginal: monedaFisica,
-              
               montoCobrado: montoBaseUSD, 
               monedaCobro: 'USD', 
-              
               montoAdeudadoRestante: montoBaseUSD, 
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar'
           };
@@ -747,7 +745,6 @@
           
           const monedaEntregada = panelCobroReparacion.monedaPago;
           
-          // La reparación adentro ahora siempre está guardada en USD
           const abonoBaseUSD = aUSDBase(montoEntregadoFisico, monedaEntregada, db.cotizacionDolar);
           const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? parseFloat(itemReparacion.montoAdeudadoRestante) : parseFloat(itemReparacion.montoCobrado);
           
@@ -786,7 +783,7 @@
           }
       };
 
-      // --- CÁLCULOS TOTALES DASHBOARD ---
+      // --- CÁLCULOS TOTALES DASHBOARD Y VENTAS HISTÓRICAS (Semana/Mes) ---
       const totalBilleterasUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalActivosFisicosUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
@@ -796,8 +793,29 @@
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       
-      const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
-      const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const dayOfWeek = now.getDay() || 7;
+      const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1).getTime();
+
+      let totalVentasHistoricasUSD = 0;
+      let totalVentasMesUSD = 0;
+      let totalVentasSemanaUSD = 0;
+      let totalEquiposVendidos = 0;
+
+      (db.ventas || []).forEach(item => {
+          const usd = item.moneda === 'USD' ? parseFloat(item.totalComision) : parseFloat(item.totalComision) / db.cotizacionDolar;
+          totalVentasHistoricasUSD += usd;
+          totalEquiposVendidos += parseInt(item.cantidad);
+          
+          let ts = item.fechaTimestamp;
+          if (!ts && item.fecha) {
+              const partes = item.fecha.split('/');
+              if(partes.length === 3) ts = new Date(partes[2], partes[1] - 1, partes[0]).getTime();
+          }
+          if (ts >= startOfMonth) totalVentasMesUSD += usd;
+          if (ts >= startOfWeek) totalVentasSemanaUSD += usd;
+      });
       
       const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
           const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
@@ -1177,14 +1195,27 @@
               </div>
             )}
 
-            {/* VISTA 3: VENTAS Y COMISIONES */}
+            {/* VISTA 3: VENTAS Y COMISIONES (CON NUEVO DASHBOARD TRIPLE Y AGRUPACIÓN DIARIA) */}
             {vista === 'ventas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
-                <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-8 shadow-xl text-center">
-                  <p className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-sack-dollar mr-2"></i>Histórico Comisiones de Venta</p>
-                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalVentasHistoricasUSD, 'USD'))}</h2>
-                  <p className="text-slate-400 text-xs font-mono mt-3">Total acumulado ({totalEquiposVendidos} equipos).</p>
+                
+                {/* NUEVO DASHBOARD TRIPLE */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-6 shadow-xl text-center">
+                    <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-calendar-week mr-2"></i>Esta Semana</p>
+                    <h2 className="text-4xl font-black text-white">{formatDinero(convertirParaMostrar(totalVentasSemanaUSD, 'USD'))}</h2>
+                  </div>
+                  <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-6 shadow-xl text-center">
+                    <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-calendar-days mr-2"></i>Este Mes</p>
+                    <h2 className="text-4xl font-black text-white">{formatDinero(convertirParaMostrar(totalVentasMesUSD, 'USD'))}</h2>
+                  </div>
+                  <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-6 shadow-xl text-center">
+                    <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-sack-dollar mr-2"></i>Total Histórico</p>
+                    <h2 className="text-4xl font-black text-white">{formatDinero(convertirParaMostrar(totalVentasHistoricasUSD, 'USD'))}</h2>
+                    <p className="text-slate-400 text-[10px] font-mono mt-3">({totalEquiposVendidos} equipos)</p>
+                  </div>
                 </div>
+
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Registrar Ventas del Día</h3>
@@ -1192,7 +1223,7 @@
                   <form onSubmit={registrarVenta} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-4 shadow-inner">
                     <div className="flex gap-4 items-center">
                         <div className="flex-1">
-                            <label className="text-xs text-slate-400 font-bold block mb-1">Equipos Vendidos Hoy</label>
+                            <label className="text-xs text-slate-400 font-bold block mb-1">Equipos Vendidos Ahora</label>
                             <input type="number" min="1" required value={nuevaVenta.cantidad} onChange={e => setNuevaVenta({...nuevaVenta, cantidad: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-center text-lg" />
                         </div>
                         <div className="flex-1">
@@ -1206,19 +1237,19 @@
                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl transition text-base">Registrar y Sumar a "Por Cobrar"</button>
                   </form>
                   <div className="space-y-4 pt-4">
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico</h4>
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico (Agrupado por día)</h4>
                     {(db.ventas || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.ventas || []).map(item => (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                         <div>
                           <p className="font-black text-white text-lg">{item.fecha}</p>
-                          <p className="text-xs text-slate-500 mt-1">Vendidos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
+                          <p className="text-xs text-slate-500 mt-1">Total de equipos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
-                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Total de ese día</p>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Total acumulado del día</p>
                             <span className="font-mono font-black text-emerald-500 text-2xl">+{formatDinero(convertirParaMostrar(item.totalComision, item.moneda))}</span>
                           </div>
-                          <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors" title="Borrar toda la venta del día"><i className="fa-solid fa-trash"></i></button>
                         </div>
                       </div>
                     ))}
@@ -1335,7 +1366,7 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (CON COBRO PARCIAL LIBRE) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1499,7 +1530,8 @@
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
                           </div>
                           <div className="text-right">
-                            <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda), item.moneda)}</span>
+                            {/* Mostrar saldo de deuda unificada exacto en la moneda que se esté visualizando */}
+                            <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda, monedaVisual), monedaVisual)}</span>
                           </div>
                         </div>
 
@@ -1530,7 +1562,7 @@
                                   guardarEnNube({...db, deudas: db.deudas.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                               }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: item.monto, monedaAbono: item.moneda })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">Abonar</button>
+                            <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: '', monedaAbono: monedaVisual })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">Abonar</button>
                           </div>
                         )}
                       </div>
@@ -1573,10 +1605,6 @@
                       const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(item.id);
                       const colorDias = diasPasados > 30 ? 'text-rose-400' : 'text-emerald-400';
                       
-                      // Recuperar y mostrar en la moneda original de origen si se puede
-                      const monedaMostrarOriginal = item.monedaOriginalFisica || 'ARS';
-                      const montoMostrarOriginal = item.montoOriginalFisico || item.monto;
-
                       return (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-md hover:border-slate-700 transition">
                         <div className="flex justify-between items-start">
@@ -1585,8 +1613,7 @@
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
                           </div>
                           <div className="text-right">
-                            {/* Visualización unificada, usamos la lógica de la UI para mostrar sin centavos raros */}
-                            <span className="font-mono font-black text-emerald-400 text-2xl">+{formatDinero(convertirParaMostrar(item.monto, item.moneda, monedaVisual))}</span>
+                            <span className="font-mono font-black text-emerald-400 text-2xl">+{formatDinero(convertirParaMostrar(item.monto, item.moneda, monedaVisual), monedaVisual)}</span>
                             <div className="mt-2"><span className={`font-mono font-bold text-xs border border-slate-700 rounded px-2 py-1 ${colorDias}`}>Hace {diasPasados} días</span></div>
                           </div>
                         </div>
@@ -1600,7 +1627,7 @@
                                 <option value="USD">USD</option>
                               </select>
                               <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
-                                <option value="">¿A qué billetera entró la plata?</option>
+                                <option value="">¿A qué billetera entró?</option>
                                 {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                               </select>
                             </div>
@@ -1615,7 +1642,7 @@
                               <button onClick={() => setEditandoDeudaCobrar({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: convertirParaMostrar(item.monto, item.moneda, monedaVisual), monedaCobro: monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar / Abonar</button>
+                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: '', monedaCobro: monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar / Abonar</button>
                           </div>
                         )}
                       </div>
