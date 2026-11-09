@@ -56,7 +56,8 @@
     const DB_TEMPLATE = { 
         cotizacionDolar: 1500, fechaUltimaCotizacion: '',
         activos: [], gastosFijos: [], gastosPuntuales: [], 
-        deudas: [], deudasCobrar: [], stock: [], ventas: [], taller: [], reparacionesFin: [],
+        deudas: [], deudasCobrar: [], 
+        stock: [], ventas: [], taller: [], reparacionesFin: [],
         historiaConceptos: [], historiaStock: [], historiaGremios: ['iConnecture'], actividad: [] 
     };
 
@@ -92,10 +93,7 @@
       // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
-      const [montoCobroBloqueado, setMontoCobroBloqueado] = useState(false); // NUEVO: Para el lapicito
-
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '' });
 
       // ESTADOS UI DE MODALES
@@ -213,14 +211,14 @@
       // FUNCIONES DE LIMPIEZA
       // ==========================================
       const limpiarHistoriaConceptos = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos?")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
           guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
       };
 
       const limpiarHistoriaStock = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos?")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
           guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
@@ -500,6 +498,7 @@
 
       const agregarStock = (e) => {
         e.preventDefault();
+        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -598,13 +597,7 @@
           const propietarioLog = nuevaReparacion.origen === 'cliente' ? itemTaller.clienteNombre : itemTaller.gremio;
           const log = generarLog('Ingresó Equipo a Taller', `Ingresó un ${itemTaller.modelo} (${itemTaller.origen}: ${propietarioLog}). Falla: ${itemTaller.falla}`, itemTaller);
 
-          guardarEnNube({ 
-              ...db, 
-              taller: [itemTaller, ...(db.taller || [])], 
-              historiaGremios: nuevosGremios,
-              actividad: [log, ...(db.actividad || [])].slice(0, 500) 
-          });
-
+          guardarEnNube({ ...db, taller: [itemTaller, ...(db.taller || [])], historiaGremios: nuevosGremios, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaReparacion({ origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
           setMostrarInputGremioLibre(false);
       };
@@ -616,6 +609,7 @@
           }
       };
 
+      // FINALIZAR REPARACIÓN (CON AUTOCOMPLETADO LIBRE SIN CANDADO)
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto a cobrar.');
@@ -659,7 +653,6 @@
 
           guardarEnNube({ ...db, ...dbUpdates, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
-          setMontoCobroBloqueado(false);
       };
 
       const cobrarReparacionCliente = (e, itemReparacion) => {
@@ -734,11 +727,7 @@
         return (
           <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4">
             <form onSubmit={login} className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-sm w-full space-y-6 shadow-2xl fade-in">
-              <div className="text-center space-y-2">
-                <i className="fa-solid fa-fingerprint text-5xl text-blue-500 mb-3"></i>
-                <h1 className="text-3xl font-black text-white">Patrimonio</h1>
-                <p className="text-slate-400 text-sm font-bold tracking-widest uppercase">Acceso Privado</p>
-              </div>
+              <div className="text-center space-y-2"><i className="fa-solid fa-fingerprint text-5xl text-blue-500 mb-3"></i><h1 className="text-3xl font-black text-white">Patrimonio</h1><p className="text-slate-400 text-sm font-bold tracking-widest uppercase">Acceso Privado</p></div>
               <div>
                 <input type="password" required placeholder="Tu clave..." value={passInput} onChange={e => {setPassInput(e.target.value); setErrorLogin('');}} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-4 text-center text-2xl font-mono text-white tracking-widest focus:outline-none focus:border-blue-500" />
                 {errorLogin && <p className="text-rose-400 text-xs font-bold text-center mt-3">{errorLogin}</p>}
@@ -753,15 +742,8 @@
           return (
             <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4">
               <form onSubmit={procesarBloqueoCotizacion} className="bg-slate-900 border border-indigo-500/50 rounded-3xl p-8 max-w-sm w-full space-y-6 shadow-2xl fade-in text-center">
-                <div className="space-y-2">
-                  <i className="fa-solid fa-calendar-day text-5xl text-emerald-400 mb-2"></i>
-                  <h1 className="text-2xl font-black text-white">Nuevo Día de Trabajo</h1>
-                  <p className="text-slate-400 text-xs">Por favor, verificá o actualizá la cotización del dólar de hoy para desbloquear el sistema.</p>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-2">Cotización Dólar ARS de Hoy</label>
-                  <input type="number" step="any" required autoFocus value={cotizacionDiariaInput} onChange={e => setCotizacionDiariaInput(e.target.value)} className="w-full bg-slate-950 border border-emerald-500 rounded-xl px-4 py-4 text-center text-3xl font-black text-emerald-400 focus:outline-none focus:border-emerald-400" />
-                </div>
+                <div className="space-y-2"><i className="fa-solid fa-calendar-day text-5xl text-emerald-400 mb-2"></i><h1 className="text-2xl font-black text-white">Nuevo Día de Trabajo</h1><p className="text-slate-400 text-xs">Verificá o actualizá la cotización de hoy.</p></div>
+                <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-2">Cotización Dólar ARS de Hoy</label><input type="number" step="any" required autoFocus value={cotizacionDiariaInput} onChange={e => setCotizacionDiariaInput(e.target.value)} className="w-full bg-slate-950 border border-emerald-500 rounded-xl px-4 py-4 text-center text-3xl font-black text-emerald-400 focus:outline-none focus:border-emerald-400" /></div>
                 <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl transition text-base">Confirmar y Entrar</button>
               </form>
             </div>
@@ -960,6 +942,7 @@
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* Fijos */}
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3"><h3 className="text-lg font-bold text-white"><i className="fa-solid fa-calendar-check text-amber-400 mr-2"></i>Gastos Fijos y Cuotas</h3></div>
                     <form onSubmit={agregarGastoFijo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -1025,6 +1008,7 @@
                     </div>
                   </div>
 
+                  {/* Sueltos */}
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
                       <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-cart-shopping text-indigo-400 mr-2"></i>Gastos Sueltos</h3>
@@ -1221,7 +1205,7 @@
                                               <p className="text-xs text-slate-400"><strong className="text-slate-500 uppercase tracking-wider text-[9px] block mb-0.5">Estado Visual:</strong> {item.estadoVisual}</p>
                                               {item.origen === 'cliente' && (
                                                   <div className="mt-2 border-t border-slate-800 pt-2">
-                                                    {item.presupuesto ? <p className="text-xs text-emerald-400 font-mono">Presupuesto Estimado: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))} {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}</p> : <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>}
+                                                    {item.presupuesto ? (isNaN(parseFloat(item.presupuesto)) ? <p className="text-xs text-emerald-400 font-mono">Presupuesto: {item.presupuesto}</p> : <p className="text-xs text-emerald-400 font-mono">Presupuesto: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))} {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}</p>) : <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>}
                                                   </div>
                                               )}
                                           </div>
@@ -1241,7 +1225,7 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (CON AUTOCOMPLETADO) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS (AUTOCOMPLETADO LIBRE) */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1261,17 +1245,14 @@
                             const idTaller = e.target.value;
                             if (!idTaller) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
-                                setMontoCobroBloqueado(false);
                                 return;
                             }
-                            
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
+                            // Autocompleta pero deja las cajas libres para edición directa
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
-                                setMontoCobroBloqueado(true); // Bloquea la caja temporalmente
                             } else {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS' });
-                                setMontoCobroBloqueado(false);
                             }
                         }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm font-bold focus:outline-none focus:border-cyan-500">
                             <option value="">-- Seleccionar Equipo del Taller --</option>
@@ -1282,11 +1263,8 @@
                     <div>
                         <label className="text-xs text-slate-400 font-bold block mb-1">Monto a Cobrar (Ganancia final)</label>
                         <div className="flex">
-                            <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} disabled={montoCobroBloqueado} className={`w-full border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg ${montoCobroBloqueado ? 'bg-slate-800 text-slate-400' : 'bg-slate-900'}`} />
-                            {montoCobroBloqueado && (
-                                <button type="button" onClick={() => setMontoCobroBloqueado(false)} className="bg-slate-800 border-y border-slate-700 text-cyan-400 px-4 hover:text-white transition" title="Modificar presupuesto original"><i className="fa-solid fa-pen"></i></button>
-                            )}
-                            <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: e.target.value})} disabled={montoCobroBloqueado} className={`border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 ${montoCobroBloqueado ? 'bg-slate-800 text-slate-400 border-l-0' : 'bg-slate-900 border-l-0'}`}><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                            <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
+                            <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
                         </div>
                     </div>
                     
@@ -1443,14 +1421,14 @@
                     <div className="flex gap-2">
                       <select required value={nuevaDeudaCobrar.walletId} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none">
                         <option value="">¿De qué billetera le prestaste la plata?</option>
-                        {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
+                        {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre}</option>)}
                       </select>
                       <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition">Prestar Plata</button>
                     </div>
                   </form>
                   <div className="space-y-4 pt-4">
                     {(db.deudasCobrar || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay cuentas por cobrar.</p> : db.deudasCobrar.map(item => {
-                      const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(item.id);
+                      const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(Date.now());
                       const colorDias = diasPasados > 30 ? 'text-rose-400' : 'text-emerald-400';
                       return (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-md hover:border-slate-700 transition">
