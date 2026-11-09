@@ -56,8 +56,7 @@
     const DB_TEMPLATE = { 
         cotizacionDolar: 1500, fechaUltimaCotizacion: '',
         activos: [], gastosFijos: [], gastosPuntuales: [], 
-        deudas: [], deudasCobrar: [], 
-        stock: [], ventas: [], taller: [], reparacionesFin: [],
+        deudas: [], deudasCobrar: [], stock: [], ventas: [], taller: [], reparacionesFin: [],
         historiaConceptos: [], historiaStock: [], historiaGremios: ['iConnecture'], actividad: [] 
     };
 
@@ -94,13 +93,12 @@
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
       
-      // Ajuste en el formulario de finalizar: ya no pedimos billetera de entrada.
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
-      
-      // NUEVO: Estado para el panel que cobra reparaciones particulares (ya finalizadas pero pendientes de pago)
+      const [montoCobroBloqueado, setMontoCobroBloqueado] = useState(false); // NUEVO: Para el lapicito
+
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '' });
 
-      // ESTADOS UI
+      // ESTADOS UI DE MODALES
       const [editandoDolar, setEditandoDolar] = useState(false);
       const [dolarInput, setDolarInput] = useState('');
       const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
@@ -206,7 +204,6 @@
           return `${monedaVisual === 'USD' ? 'U$D' : '$'} ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${monedaVisual}`;
       };
 
-      // CORRECCIÓN NAN DÍAS: Usa exclusivamente timestamps puros
       const calcularDiasPasados = (timestamp) => {
           if (!timestamp || isNaN(timestamp)) return 0;
           return Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)); 
@@ -216,14 +213,14 @@
       // FUNCIONES DE LIMPIEZA
       // ==========================================
       const limpiarHistoriaConceptos = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos?")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
           guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
       };
 
       const limpiarHistoriaStock = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos?")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
           guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
         }
@@ -421,7 +418,7 @@
           deudasActualizadas[idxExistente].motivo = nuevaDeuda.motivo.trim(); 
           log = generarLog('Aumentó Deuda Existente', `Le sumó ${montoNuevo} ${nuevaDeuda.moneda} a la deuda con "${deudasActualizadas[idxExistente].acreedor}". Motivo: ${nuevaDeuda.motivo}`, deudasActualizadas[idxExistente]);
         } else {
-          const item = { id: Date.now(), fechaTimestamp: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), motivo: nuevaDeuda.motivo.trim(), monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
+          const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), motivo: nuevaDeuda.motivo.trim(), monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
           deudasActualizadas.unshift(item);
           log = generarLog('Creó Nueva Deuda', `Registró deuda con "${item.acreedor}" por ${item.monto} ${item.moneda}. Motivo: ${item.motivo}`, item);
         }
@@ -503,7 +500,6 @@
 
       const agregarStock = (e) => {
         e.preventDefault();
-        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -620,10 +616,9 @@
           }
       };
 
-      // MAGIA 1: SACAR DEL TALLER Y MANDAR A "PENDIENTE" O "A COBRAR" (DEPENDIENDO SI ES CLIENTE O GREMIO)
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
-          if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto.');
+          if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto a cobrar.');
           
           const montoFin = parseFloat(nuevaReparacionFinalizada.montoCobrado);
           if (montoFin <= 0) return alert("El monto debe ser mayor a cero.");
@@ -643,7 +638,6 @@
           let dbUpdates = { taller: tallerActualizado, reparacionesFin: reparacionesFinActualizadas };
           let log;
 
-          // Si es gremio, la plata se va directo a "Cuentas por Cobrar" y ahí queda
           if (equipo.origen === 'gremio') {
               let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
               const idxExistente = deudasCobrarActualizadas.findIndex(d => d.deudor === equipo.gremio && d.moneda === nuevaReparacionFinalizada.monedaCobro);
@@ -660,23 +654,20 @@
               dbUpdates.deudasCobrar = deudasCobrarActualizadas;
               log = generarLog('Finalizó Reparación Gremio', `Finalizó ${equipo.modelo} de ${equipo.gremio}. Se sumaron ${montoFin} ${nuevaReparacionFinalizada.monedaCobro} a sus Cuentas por Cobrar.`, registroFin);
           } else {
-              // Si es cliente, queda en el mismo panel de reparaciones pero esperando que el cliente venga
               log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}. Quedó pendiente de pago por ${montoFin} ${nuevaReparacionFinalizada.monedaCobro}.`, registroFin);
           }
 
           guardarEnNube({ ...db, ...dbUpdates, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+          setMontoCobroBloqueado(false);
       };
 
-      // MAGIA 2: COBRAR EL EQUIPO DEL CLIENTE EN LA PESTAÑA DE REPARACIONES
       const cobrarReparacionCliente = (e, itemReparacion) => {
           e.preventDefault();
           if (!panelCobroReparacion.walletId) return alert('Elegí a qué billetera entra la plata del cliente.');
 
-          // Metemos la plata en la billetera
           const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, itemReparacion.montoCobrado, itemReparacion.monedaCobro, db.activos);
           
-          // Cambiamos el estado de la reparación a "cobrado"
           const reparacionesFinActualizadas = (db.reparacionesFin || []).map(r => {
               if (r.id === itemReparacion.id) {
                   return { ...r, estadoCobro: 'cobrado', walletIdCobro: parseInt(panelCobroReparacion.walletId) };
@@ -735,7 +726,7 @@
       });
 
       // ==========================================
-      // 5. INTERFACES
+      // UI RENDER
       // ==========================================
       if (!isLoaded) return <div className="flex h-screen items-center justify-center font-bold text-blue-400 animate-pulse text-xl">Conectando a tu Nube...</div>;
 
@@ -744,7 +735,9 @@
           <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4">
             <form onSubmit={login} className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-sm w-full space-y-6 shadow-2xl fade-in">
               <div className="text-center space-y-2">
-                <i className="fa-solid fa-fingerprint text-5xl text-blue-500 mb-3"></i><h1 className="text-3xl font-black text-white">Patrimonio</h1><p className="text-slate-400 text-sm font-bold tracking-widest uppercase">Acceso Privado</p>
+                <i className="fa-solid fa-fingerprint text-5xl text-blue-500 mb-3"></i>
+                <h1 className="text-3xl font-black text-white">Patrimonio</h1>
+                <p className="text-slate-400 text-sm font-bold tracking-widest uppercase">Acceso Privado</p>
               </div>
               <div>
                 <input type="password" required placeholder="Tu clave..." value={passInput} onChange={e => {setPassInput(e.target.value); setErrorLogin('');}} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-4 text-center text-2xl font-mono text-white tracking-widest focus:outline-none focus:border-blue-500" />
@@ -760,8 +753,15 @@
           return (
             <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4">
               <form onSubmit={procesarBloqueoCotizacion} className="bg-slate-900 border border-indigo-500/50 rounded-3xl p-8 max-w-sm w-full space-y-6 shadow-2xl fade-in text-center">
-                <div className="space-y-2"><i className="fa-solid fa-calendar-day text-5xl text-emerald-400 mb-2"></i><h1 className="text-2xl font-black text-white">Nuevo Día de Trabajo</h1><p className="text-slate-400 text-xs">Verificá o actualizá la cotización de hoy.</p></div>
-                <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-2">Cotización Dólar ARS de Hoy</label><input type="number" step="any" required autoFocus value={cotizacionDiariaInput} onChange={e => setCotizacionDiariaInput(e.target.value)} className="w-full bg-slate-950 border border-emerald-500 rounded-xl px-4 py-4 text-center text-3xl font-black text-emerald-400 focus:outline-none focus:border-emerald-400" /></div>
+                <div className="space-y-2">
+                  <i className="fa-solid fa-calendar-day text-5xl text-emerald-400 mb-2"></i>
+                  <h1 className="text-2xl font-black text-white">Nuevo Día de Trabajo</h1>
+                  <p className="text-slate-400 text-xs">Por favor, verificá o actualizá la cotización del dólar de hoy para desbloquear el sistema.</p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-2">Cotización Dólar ARS de Hoy</label>
+                  <input type="number" step="any" required autoFocus value={cotizacionDiariaInput} onChange={e => setCotizacionDiariaInput(e.target.value)} className="w-full bg-slate-950 border border-emerald-500 rounded-xl px-4 py-4 text-center text-3xl font-black text-emerald-400 focus:outline-none focus:border-emerald-400" />
+                </div>
                 <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl transition text-base">Confirmar y Entrar</button>
               </form>
             </div>
@@ -863,7 +863,7 @@
                   <form onSubmit={procesarTransferenciaInterna} className="flex flex-col md:flex-row gap-3 items-end">
                     <div className="flex-1 w-full">
                       <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Origen (Sale plata)</label>
-                      <select required value={nuevaTransferencia.origenId} onChange={e => setNuevaTransferencia({...nuevaTransferencia, origenId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold">
+                      <select required value={nuevaTransferencia.origenId} onChange={e => setNuevaTransferencia({...nuevaTransferencia, origenId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-indigo-500">
                         <option value="">Elegí billetera...</option>
                         {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
                       </select>
@@ -871,7 +871,7 @@
                     <div className="flex items-center justify-center px-2 text-indigo-500/50 hidden md:block pb-3"><i className="fa-solid fa-arrow-right"></i></div>
                     <div className="flex-1 w-full">
                       <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Destino (Entra plata)</label>
-                      <select required value={nuevaTransferencia.destinoId} onChange={e => setNuevaTransferencia({...nuevaTransferencia, destinoId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold">
+                      <select required value={nuevaTransferencia.destinoId} onChange={e => setNuevaTransferencia({...nuevaTransferencia, destinoId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-indigo-500">
                         <option value="">Elegí billetera...</option>
                         {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                       </select>
@@ -879,8 +879,8 @@
                     <div className="flex-1 w-full">
                       <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Monto a mover</label>
                       <div className="flex">
-                        <input type="number" step="any" required placeholder="0.00" value={nuevaTransferencia.monto} onChange={e => setNuevaTransferencia({...nuevaTransferencia, monto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-l-xl px-3 py-3 text-white font-mono" />
-                        <select value={nuevaTransferencia.moneda} onChange={e => setNuevaTransferencia({...nuevaTransferencia, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-r-xl px-2 py-3 text-white font-bold border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                        <input type="number" step="any" required placeholder="0.00" value={nuevaTransferencia.monto} onChange={e => setNuevaTransferencia({...nuevaTransferencia, monto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-l-xl px-3 py-3 text-white font-mono focus:outline-none focus:border-indigo-500" />
+                        <select value={nuevaTransferencia.moneda} onChange={e => setNuevaTransferencia({...nuevaTransferencia, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-r-xl px-2 py-3 text-white font-bold border-l-0 focus:outline-none focus:border-indigo-500"><option value="ARS">ARS</option><option value="USD">USD</option></select>
                       </div>
                     </div>
                     <button type="submit" className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-3 rounded-xl transition">Mover</button>
@@ -893,17 +893,17 @@
                   </div>
                   <form onSubmit={agregarActivo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                     <div className="flex flex-col md:flex-row gap-3">
-                      <select value={nuevoActivo.tipo} onChange={e => setNuevoActivo({...nuevoActivo, tipo: e.target.value})} className="md:w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold"><option value="billetera">Dinero Líquido</option><option value="activo">Activo Físico</option></select>
-                      <input type="text" required placeholder="Nombre (Ej: Mercadopago o Auto)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="md:w-2/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm" />
+                      <select value={nuevoActivo.tipo} onChange={e => setNuevoActivo({...nuevoActivo, tipo: e.target.value})} className="md:w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-blue-500"><option value="billetera">Dinero Líquido</option><option value="activo">Activo Físico</option></select>
+                      <input type="text" required placeholder="Nombre (Ej: Mercadopago o Auto)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="md:w-2/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" />
                     </div>
                     <div className="flex gap-2">
-                      <input type="number" step="any" required placeholder="Valor de Ingreso" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
-                      <select value={nuevoActivo.moneda} onChange={e => setNuevoActivo({...nuevoActivo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                      <input type="number" step="any" required placeholder="Valor de Ingreso" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-blue-500 text-lg" />
+                      <select value={nuevoActivo.moneda} onChange={e => setNuevoActivo({...nuevoActivo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-bold focus:outline-none focus:border-blue-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                       <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i> Ingresar</button>
                     </div>
                   </form>
                   <div className="space-y-3">
-                    {db.activos.length === 0 ? <p className="text-center text-slate-500 py-8 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.activos.map(item => (
+                    {db.activos.length === 0 ? <p className="text-center text-slate-500 py-8 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No tenés cuentas ni activos registrados.</p> : db.activos.map(item => (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                         <div className="w-full md:w-auto">
                           <p className="font-bold text-white text-base flex items-center gap-2">
@@ -960,7 +960,6 @@
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  {/* Fijos */}
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3"><h3 className="text-lg font-bold text-white"><i className="fa-solid fa-calendar-check text-amber-400 mr-2"></i>Gastos Fijos y Cuotas</h3></div>
                     <form onSubmit={agregarGastoFijo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -1026,13 +1025,11 @@
                     </div>
                   </div>
 
-                  {/* Sueltos */}
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
                       <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-cart-shopping text-indigo-400 mr-2"></i>Gastos Sueltos</h3>
                       {opcionesConcepto.length > 0 && <button onClick={limpiarHistoriaConceptos} title="Limpiar categorías guardadas" className="text-slate-600 hover:text-indigo-400 bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
                     </div>
-
                     <form onSubmit={agregarGastoPuntual} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                       <div className="flex gap-2">
                         {!mostrarInputConceptoLibre ? (
@@ -1065,7 +1062,6 @@
                         <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                       </div>
                     </form>
-
                     <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
                       {(db.gastosPuntuales || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.gastosPuntuales.map(item => (
                         <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex justify-between items-center hover:border-slate-700 transition">
@@ -1115,7 +1111,6 @@
                     </div>
                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl transition text-base">Registrar y Sumar a "Por Cobrar"</button>
                   </form>
-
                   <div className="space-y-4 pt-4">
                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico</h4>
                     {(db.ventas || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.ventas || []).map(item => (
@@ -1165,7 +1160,7 @@
                           {nuevaReparacion.origen === 'cliente' ? (
                               <>
                                 <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Nombre del Cliente</label><input type="text" required value={nuevaReparacion.clienteNombre} onChange={e => setNuevaReparacion({...nuevaReparacion, clienteNombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs" /></div>
-                                <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Teléfono (10 números)</label><input type="text" maxLength="10" required placeholder="Ej: 3412345678" value={nuevaReparacion.clienteTelefono} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, clienteTelefono: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs font-mono" /></div>
+                                <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Teléfono (10 números exactos)</label><input type="text" maxLength="10" required placeholder="Ej: 3412345678" value={nuevaReparacion.clienteTelefono} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, clienteTelefono: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs font-mono" /></div>
                               </>
                           ) : (
                               <div>
@@ -1190,7 +1185,7 @@
 
                           <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800">
                               <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Modelo de iPhone</label><input type="text" required placeholder="Ej: iPhone 13 Pro" value={nuevaReparacion.modelo} onChange={e => setNuevaReparacion({...nuevaReparacion, modelo: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs" /></div>
-                              <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI (15 números)</label><input type="text" maxLength="15" required placeholder="15 dígitos" value={nuevaReparacion.imei} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, imei: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-[10px]" /></div>
+                              <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI (15 núm. exactos)</label><input type="text" maxLength="15" required placeholder="15 dígitos" value={nuevaReparacion.imei} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, imei: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-[10px]" /></div>
                           </div>
                           <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Estado Visual / Observaciones</label><textarea required rows="2" placeholder="(Ej: Pantalla rota)" value={nuevaReparacion.estadoVisual} onChange={e => setNuevaReparacion({...nuevaReparacion, estadoVisual: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs resize-none"></textarea></div>
                           <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Falla Declarada</label><input type="text" required placeholder="¿Qué hay que hacerle?" value={nuevaReparacion.falla} onChange={e => setNuevaReparacion({...nuevaReparacion, falla: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs" /></div>
@@ -1226,7 +1221,7 @@
                                               <p className="text-xs text-slate-400"><strong className="text-slate-500 uppercase tracking-wider text-[9px] block mb-0.5">Estado Visual:</strong> {item.estadoVisual}</p>
                                               {item.origen === 'cliente' && (
                                                   <div className="mt-2 border-t border-slate-800 pt-2">
-                                                    {item.presupuesto ? (isNaN(parseFloat(item.presupuesto)) ? <p className="text-xs text-emerald-400 font-mono">Presupuesto: {item.presupuesto}</p> : <p className="text-xs text-emerald-400 font-mono">Presupuesto: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))} {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}</p>) : <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>}
+                                                    {item.presupuesto ? <p className="text-xs text-emerald-400 font-mono">Presupuesto Estimado: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))} {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}</p> : <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>}
                                                   </div>
                                               )}
                                           </div>
@@ -1246,7 +1241,7 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (CON MAGIA DE COBRO PENDIENTE) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS (CON AUTOCOMPLETADO) */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1257,27 +1252,44 @@
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Finalizar Equipo (Dar de baja del taller)</h3>
-                    <p className="text-xs text-slate-400 mt-1">Si es de un Gremio, se sumará a Cuentas por Cobrar. Si es de Cliente, quedará acá pendiente hasta que lo pague.</p>
                   </div>
                   
                   <form onSubmit={procesarFinalizacionReparacion} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-4 shadow-inner">
                     <div>
                         <label className="text-xs text-slate-400 font-bold block mb-2">Equipo Listo</label>
-                        <select required value={nuevaReparacionFinalizada.idEquipoTaller} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, idEquipoTaller: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm font-bold focus:outline-none focus:border-cyan-500">
+                        <select required value={nuevaReparacionFinalizada.idEquipoTaller} onChange={e => {
+                            const idTaller = e.target.value;
+                            if (!idTaller) {
+                                setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+                                setMontoCobroBloqueado(false);
+                                return;
+                            }
+                            
+                            const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
+                            if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
+                                setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
+                                setMontoCobroBloqueado(true); // Bloquea la caja temporalmente
+                            } else {
+                                setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS' });
+                                setMontoCobroBloqueado(false);
+                            }
+                        }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm font-bold focus:outline-none focus:border-cyan-500">
                             <option value="">-- Seleccionar Equipo del Taller --</option>
                             {(db.taller || []).map(t => <option key={t.id} value={t.id}>{t.modelo} - {t.origen === 'cliente' ? t.clienteNombre : t.gremio}</option>)}
                         </select>
                     </div>
 
-                    <div className="flex gap-4">
-                        <div className="flex-1">
-                            <label className="text-xs text-slate-400 font-bold block mb-1">Monto a Cobrar (Ganancia)</label>
-                            <div className="flex">
-                                <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500" />
-                                <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
-                            </div>
+                    <div>
+                        <label className="text-xs text-slate-400 font-bold block mb-1">Monto a Cobrar (Ganancia final)</label>
+                        <div className="flex">
+                            <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} disabled={montoCobroBloqueado} className={`w-full border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg ${montoCobroBloqueado ? 'bg-slate-800 text-slate-400' : 'bg-slate-900'}`} />
+                            {montoCobroBloqueado && (
+                                <button type="button" onClick={() => setMontoCobroBloqueado(false)} className="bg-slate-800 border-y border-slate-700 text-cyan-400 px-4 hover:text-white transition" title="Modificar presupuesto original"><i className="fa-solid fa-pen"></i></button>
+                            )}
+                            <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: e.target.value})} disabled={montoCobroBloqueado} className={`border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 ${montoCobroBloqueado ? 'bg-slate-800 text-slate-400 border-l-0' : 'bg-slate-900 border-l-0'}`}><option value="ARS">ARS</option><option value="USD">USD</option></select>
                         </div>
                     </div>
+                    
                     <button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-4 rounded-xl transition text-base shadow-lg">Finalizar Reparación</button>
                   </form>
 
@@ -1285,7 +1297,6 @@
                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Historial de Reparaciones Finalizadas</h4>
                     {(db.reparacionesFin || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.reparacionesFin || []).map(item => {
                         const esPendiente = item.estadoCobro === 'pendiente';
-                        
                         return (
                           <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                             <div className="flex-1 w-full">
@@ -1294,9 +1305,8 @@
                                   <span className="bg-slate-800 text-slate-400 px-2 py-0.5 rounded text-[10px] font-mono">IMEI: {item.equipoOriginal.imei}</span>
                               </div>
                               <p className="text-xs text-slate-400 mt-1">Reparación: <strong className="text-slate-300">{item.equipoOriginal.falla}</strong></p>
-                              <p className="text-xs text-slate-500 mt-1">Cliente: {item.equipoOriginal.origen === 'cliente' ? item.equipoOriginal.clienteNombre : item.equipoOriginal.gremio} • Finalizado: {item.fecha}</p>
+                              <p className="text-xs text-slate-500 mt-1">Cliente: {item.equipoOriginal.origen === 'cliente' ? item.equipoOriginal.clienteNombre : item.equipoOriginal.gremio} • Fin: {item.fecha}</p>
                               
-                              {/* ETIQUETA DE ESTADO */}
                               <div className="mt-3">
                                   {esPendiente ? (
                                       <span className="bg-rose-950 border border-rose-800 text-rose-400 px-3 py-1 rounded text-xs font-bold animate-pulse">PENDIENTE DE PAGO (CLIENTE)</span>
@@ -1313,11 +1323,8 @@
                                 <span className="font-mono font-black text-cyan-400 text-2xl">{formatDinero(convertirParaMostrar(item.montoCobrado, item.monedaCobro))}</span>
                               </div>
 
-                              {/* ACCIONES */}
                               {esPendiente && panelCobroReparacion.idReparacion !== item.id && (
-                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">
-                                      Cobrar
-                                  </button>
+                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Cobrar</button>
                               )}
 
                               {panelCobroReparacion.idReparacion === item.id && (
@@ -1334,7 +1341,7 @@
                               )}
 
                               {!esPendiente && (
-                                  <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-3 py-2 rounded-lg transition-colors text-xs" title="Borrar del registro (No afecta la plata)"><i className="fa-solid fa-trash"></i> Eliminar Registro</button>
+                                  <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-3 py-2 rounded-lg transition-colors text-xs"><i className="fa-solid fa-trash"></i> Eliminar Registro</button>
                               )}
                             </div>
                           </div>
@@ -1345,42 +1352,35 @@
               </div>
             )}
 
-            {/* VISTA 5: DEUDAS A OTROS (Con Motivo) */}
+            {/* VISTA 5: DEUDAS A OTROS */}
             {vista === 'deudas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
-                
                 <div className="bg-gradient-to-br from-rose-900/40 to-slate-900 border border-rose-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-rose-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-handshake mr-2"></i>Total Deudas a Otros</p>
                   <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalDeudasPendientesUSD, 'USD'))}</h2>
-                  <p className="text-slate-400 text-xs font-mono mt-3">Resta directo de tu Patrimonio Neto Real.</p>
                 </div>
-
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Cargar Nueva Deuda / Pedir Prestado</h3>
-                    <p className="text-xs text-slate-400 mt-1">Anotá a quién le debés y explicá para qué pediste la plata.</p>
                   </div>
-                  
                   <form onSubmit={agregarDeuda} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                     <div className="flex gap-2">
-                        <input type="text" required placeholder="Acreedor (Ej: Banco / Juan)" value={nuevaDeuda.acreedor} onChange={e => setNuevaDeuda({...nuevaDeuda, acreedor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500" />
-                        <input type="text" required placeholder="Motivo (Obligatorio. Ej: Comprar repuestos)" value={nuevaDeuda.motivo} onChange={e => setNuevaDeuda({...nuevaDeuda, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500 text-sm" />
+                        <input type="text" required placeholder="Acreedor (Ej: Banco / Juan)" value={nuevaDeuda.acreedor} onChange={e => setNuevaDeuda({...nuevaDeuda, acreedor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none" />
+                        <input type="text" required placeholder="Motivo (Obligatorio)" value={nuevaDeuda.motivo} onChange={e => setNuevaDeuda({...nuevaDeuda, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none text-sm" />
                     </div>
                     <div className="flex gap-2">
-                      <input type="number" step="any" required placeholder="Monto de la Deuda" value={nuevaDeuda.monto} onChange={e => setNuevaDeuda({...nuevaDeuda, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-rose-500 text-lg" />
-                      <select value={nuevaDeuda.moneda} onChange={e => setNuevaDeuda({...nuevaDeuda, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-rose-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
-                      <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-6 py-3 rounded-xl transition">Cargar Deuda</button>
+                      <input type="number" step="any" required placeholder="Monto" value={nuevaDeuda.monto} onChange={e => setNuevaDeuda({...nuevaDeuda, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none text-lg" />
+                      <select value={nuevaDeuda.moneda} onChange={e => setNuevaDeuda({...nuevaDeuda, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                      <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-6 py-3 rounded-xl transition">Cargar</button>
                     </div>
                   </form>
-
                   <div className="space-y-4 pt-4">
-                    {(db.deudas || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Al día, sin deudas.</p> : db.deudas.map(item => (
+                    {(db.deudas || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Al día.</p> : db.deudas.map(item => (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-md hover:border-slate-700 transition">
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="font-black text-white text-lg">{item.acreedor}</p>
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
-                            {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Base: {item.monto} {item.moneda}</p>}
                           </div>
                           <div className="text-right">
                             <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
@@ -1389,12 +1389,11 @@
 
                         {pagoDeudaActivo.idDeuda === item.id ? (
                           <div className="bg-slate-900 p-4 rounded-xl border border-emerald-500/50 flex flex-col gap-3 fade-in">
-                            <p className="text-xs text-emerald-400 font-bold">Abonar o liquidar deuda:</p>
                             <div className="flex gap-2">
-                              <input type="number" step="any" placeholder="Monto a entregar" value={pagoDeudaActivo.montoAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, montoAbono: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
+                              <input type="number" step="any" placeholder="Monto" value={pagoDeudaActivo.montoAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, montoAbono: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
                               <select value={pagoDeudaActivo.walletId} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
-                                <option value="">¿De qué billetera sacás la plata?</option>
-                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre} (Saldo: {a.monto} {a.moneda})</option>)}
+                                <option value="">¿De qué billetera sale?</option>
+                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                               </select>
                             </div>
                             <div className="flex gap-2">
@@ -1407,13 +1406,11 @@
                             <div className="flex gap-1">
                               <button onClick={() => setEditandoDeuda({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => {
-                                  const log = generarLog('Eliminó Deuda', `Borró la deuda de "${item.acreedor}" sin registrar pago.`, item);
+                                  const log = generarLog('Eliminó Deuda', `Borró la deuda de "${item.acreedor}".`, item);
                                   guardarEnNube({...db, deudas: db.deudas.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                               }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: item.monto })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">
-                              Abonar / Liquidar
-                            </button>
+                            <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: item.monto })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">Abonar</button>
                           </div>
                         )}
                       </div>
@@ -1423,54 +1420,44 @@
               </div>
             )}
 
-            {/* VISTA 6: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO */}
+            {/* VISTA 6: DEUDAS A COBRAR */}
             {vista === 'cobrar' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
-                
                 <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-8 shadow-xl text-center">
-                  <p className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-hand-holding-dollar mr-2"></i>Total a Cobrar (Préstamos y Comisiones)</p>
+                  <p className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-hand-holding-dollar mr-2"></i>Total a Cobrar</p>
                   <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalDeudasCobrarUSD, 'USD'))}</h2>
-                  <p className="text-slate-400 text-xs font-mono mt-3">Es tu plata, pero hoy no la tenés líquida.</p>
                 </div>
-
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Prestar Plata Manualmente</h3>
-                    <p className="text-xs text-slate-400 mt-1">Explicá por qué prestaste la plata. Se descontará de tu billetera y quedará acá hasta que te paguen.</p>
                   </div>
-                  
                   <form onSubmit={agregarDeudaCobrar} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                     <div className="flex gap-2">
-                        <input type="text" required placeholder="Deudor (Ej: Cliente X)" value={nuevaDeudaCobrar.deudor} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, deudor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500" />
-                        <input type="text" required placeholder="Motivo (Obligatorio. Ej: Adelanto sueldo)" value={nuevaDeudaCobrar.motivo} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 text-sm" />
+                        <input type="text" required placeholder="Deudor (Ej: Cliente X)" value={nuevaDeudaCobrar.deudor} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, deudor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none" />
+                        <input type="text" required placeholder="Motivo (Obligatorio)" value={nuevaDeudaCobrar.motivo} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none text-sm" />
                     </div>
                     <div className="flex gap-2">
-                      <input type="number" step="any" required placeholder="Monto" value={nuevaDeudaCobrar.monto} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-emerald-500 text-lg" />
-                      <select value={nuevaDeudaCobrar.moneda} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-emerald-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                      <input type="number" step="any" required placeholder="Monto" value={nuevaDeudaCobrar.monto} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none text-lg" />
+                      <select value={nuevaDeudaCobrar.moneda} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                     </div>
-
                     <div className="flex gap-2">
-                      <select required value={nuevaDeudaCobrar.walletId} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-emerald-500">
+                      <select required value={nuevaDeudaCobrar.walletId} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none">
                         <option value="">¿De qué billetera le prestaste la plata?</option>
                         {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
                       </select>
                       <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition">Prestar Plata</button>
                     </div>
                   </form>
-
                   <div className="space-y-4 pt-4">
                     {(db.deudasCobrar || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay cuentas por cobrar.</p> : db.deudasCobrar.map(item => {
-                      
-                      const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(Date.now()); // Fallback seguro
+                      const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(item.id);
                       const colorDias = diasPasados > 30 ? 'text-rose-400' : 'text-emerald-400';
-
                       return (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-md hover:border-slate-700 transition">
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="font-black text-white text-lg">{item.deudor}</p>
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
-                            {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Base: {item.monto} {item.moneda}</p>}
                           </div>
                           <div className="text-right">
                             <span className="font-mono font-black text-emerald-400 text-2xl">+{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
@@ -1480,12 +1467,11 @@
 
                         {cobroDeudaActivo.idDeuda === item.id ? (
                           <div className="bg-slate-900 p-4 rounded-xl border border-indigo-500/50 flex flex-col gap-3 fade-in">
-                            <p className="text-xs text-indigo-400 font-bold">Cobrar plata devuelta:</p>
                             <div className="flex gap-2">
                               <input type="number" step="any" placeholder="Monto que te dio" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
                               <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
                                 <option value="">¿A qué billetera entró la plata?</option>
-                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre} (Guardar acá)</option>)}
+                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                               </select>
                             </div>
                             <div className="flex gap-2">
@@ -1497,11 +1483,9 @@
                           <div className="flex justify-between items-center border-t border-slate-800/50 pt-3">
                             <div className="flex gap-1">
                               <button onClick={() => setEditandoDeudaCobrar({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-pen"></i></button>
-                              <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition" title="Dar por perdida (Incobrable)"><i className="fa-solid fa-trash"></i></button>
+                              <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: item.monto })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">
-                              Registrar Cobro
-                            </button>
+                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: item.monto })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar</button>
                           </div>
                         )}
                       </div>
@@ -1511,7 +1495,74 @@
               </div>
             )}
 
-            {/* VISTA 7: AUDITORÍA */}
+            {/* VISTA 7: STOCK */}
+            {vista === 'stock' && (
+              <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
+                <div className="bg-gradient-to-br from-amber-900/40 to-slate-900 border border-amber-500/30 rounded-3xl p-8 shadow-xl text-center">
+                  <p className="text-sm font-bold text-amber-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-boxes-stacked mr-2"></i>Capital Físico en Stock</p>
+                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalStockUSD, 'USD'))}</h2>
+                </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
+                  <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
+                    <h3 className="text-lg font-bold text-white">Ingresar Repuestos</h3>
+                    {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} className="text-slate-600 hover:text-amber-400 transition-colors bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
+                  </div>
+                  
+                  <form onSubmit={agregarStock} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
+                    <div className="flex gap-2">
+                      {!mostrarInputStockLibre ? (
+                        <select value={nuevoStock.concepto} onChange={e => {
+                            if (e.target.value === 'OTRO') { setMostrarInputStockLibre(true); setNuevoStock({...nuevoStock, concepto: ''}); }
+                            else setNuevoStock({...nuevoStock, concepto: e.target.value});
+                        }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none">
+                          <option value="">-- Buscar en memoria --</option>
+                          {opcionesStock.map(op => <option key={op} value={op}>{op}</option>)}
+                          <option value="OTRO" className="font-bold text-amber-400">➕ Escribir concepto nuevo...</option>
+                        </select>
+                      ) : (
+                        <div className="w-full flex gap-2 fade-in">
+                          <input type="text" required autoFocus placeholder="Ej: Batería iPhone 15 Pro..." value={nuevoStock.concepto} onChange={e => setNuevoStock({...nuevoStock, concepto: e.target.value})} className="flex-1 bg-slate-900 border border-amber-500 rounded-xl px-4 py-3 text-white focus:outline-none text-sm" />
+                          <button type="button" onClick={() => {setMostrarInputStockLibre(false); setNuevoStock({...nuevoStock, concepto: ''});}} className="bg-slate-800 text-white px-4 py-3 rounded-xl"><i className="fa-solid fa-xmark"></i></button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input type="number" min="1" required placeholder="Cant." value={nuevoStock.cantidad} onChange={e => setNuevoStock({...nuevoStock, cantidad: e.target.value})} className="w-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-mono text-center" />
+                      <input type="number" step="any" required placeholder="Costo Unit." value={nuevoStock.monto} onChange={e => setNuevoStock({...nuevoStock, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono" />
+                      <select value={nuevoStock.moneda} onChange={e => setNuevoStock({...nuevoStock, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                      <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-6 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
+                    </div>
+                  </form>
+                  <div className="space-y-3 pt-4">
+                    {(db.stock || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.stock.map(item => (
+                      <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
+                        <div className="flex-1 w-full flex justify-between items-center md:block">
+                          <p className="font-bold text-white text-base">{item.concepto}</p>
+                          {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Costo Original: {item.monto} {item.moneda}</p>}
+                        </div>
+                        <div className="flex items-center gap-4">
+                           <span className="font-mono font-bold text-slate-400 text-sm">Eq: {formatDinero(convertirParaMostrar(item.monto, item.moneda))} c/u</span>
+                          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shrink-0">
+                            <button onClick={() => modificarCantidadStock(item.id, -1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-minus text-xs"></i></button>
+                            <span className="px-4 py-2 font-mono font-black text-amber-400 border-x border-slate-700 bg-slate-950 text-base min-w-[50px] text-center">{item.cantidad}</span>
+                            <button onClick={() => modificarCantidadStock(item.id, 1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-plus text-xs"></i></button>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button onClick={() => setEditandoStock({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-9 h-9 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
+                          <button onClick={() => {
+                              const log = generarLog('Eliminó Repuesto', `Eliminó el repuesto "${item.concepto}" entero del sistema.`, item);
+                              guardarEnNube({...db, stock: db.stock.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+                          }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-9 h-9 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VISTA 8: AUDITORÍA */}
             {vista === 'actividad' && (
               <div className="max-w-6xl mx-auto space-y-6 pb-20 fade-in">
                 <header className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl flex justify-between items-center">
@@ -1594,6 +1645,7 @@
               </div>
             </div>
           )}
+
           {editandoActivo && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
