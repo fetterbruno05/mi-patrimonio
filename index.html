@@ -97,7 +97,7 @@
         return {
           id: Date.now() + Math.floor(Math.random() * 1000),
           fecha: new Date().toISOString(),
-          usuario: 'Bruno', // Por ahora sos el único usuario
+          usuario: 'Bruno',
           accion,
           detalle,
           datosExtra
@@ -166,6 +166,20 @@
 
       const formatDinero = (montoUSD) => {
         return `$ ${parseFloat(montoUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+      };
+
+      const limpiarHistoriaConceptos = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
+          guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      const limpiarHistoriaStock = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
+          guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
       };
 
       // ==========================================
@@ -393,7 +407,7 @@
       const patrimonioNetoRealUSD = totalBilleterasYActivosUSD + totalStockUSD - totalDeudasPendientesUSD;
 
       // ==========================================
-      // INTERFACES
+      // 5. INTERFACES
       // ==========================================
       if (!isLoaded) return <div className="flex h-screen items-center justify-center font-bold text-blue-400 animate-pulse text-xl">Conectando a tu Nube...</div>;
 
@@ -669,9 +683,9 @@
                           <div>
                             <p className="font-bold text-white text-base">{item.concepto}</p>
                             <p className="text-[11px] text-slate-500 mt-1">{item.fecha} • {item.monto} {item.moneda}</p>
-                            <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Dinero salió de: {item.pagadoCon}</p>
+                            <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Pagado con: {item.pagadoCon}</p>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-4">
                             <span className="font-mono font-black text-rose-400 text-lg mr-2">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
                             <button onClick={() => setEditandoGastoPuntual({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
                             <button onClick={() => eliminarGastoPuntual(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
