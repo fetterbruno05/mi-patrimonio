@@ -92,7 +92,8 @@
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
       
-      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+      // Se agrega "repuestoId" al finalizar reparación para descontar el stock
+      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS' });
 
       // ESTADOS UI DE MODALES
@@ -143,9 +144,7 @@
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
                 deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
                 deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean).map(d => {
-                    if(d.moneda !== 'USD'){
-                        return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(4), moneda: 'USD' };
-                    }
+                    if(d.moneda !== 'USD'){ return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(4), moneda: 'USD' }; }
                     return d;
                 }) : [],
                 stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean) : [],
@@ -194,9 +193,6 @@
           setBloqueoCotizacion(false);
       };
 
-      // ==========================================
-      // CORRECCIÓN MATEMÁTICA: PRECISIÓN DE CENTAVOS
-      // ==========================================
       const redondear = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
 
       const aUSDBase = (monto, moneda, coti) => {
@@ -219,12 +215,8 @@
           if (modoPrivado) return `**** ${overrideMoneda || monedaVisual}`;
           const val = parseFloat(monto || 0);
           const monedaFinal = overrideMoneda || monedaVisual;
-          
-          if (monedaFinal === 'USD') {
-              return `U$D ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
-          } else {
-              return `$ ${Math.round(val).toLocaleString('es-AR')} ARS`;
-          }
+          if (monedaFinal === 'USD') { return `U$D ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`; } 
+          else { return `$ ${Math.round(val).toLocaleString('es-AR')} ARS`; }
       };
 
       const calcularDiasPasados = (timestamp) => {
@@ -246,16 +238,12 @@
         }
       };
 
-      // ==========================================
-      // ASISTENTE INTELIGENTE
-      // ==========================================
       useEffect(() => { if(chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [chatAsistente, vista]);
 
       const procesarConsultaAsistente = (e) => {
         e.preventDefault();
         const textoUser = consultaAsistente.trim();
         if(!textoUser) return;
-        
         setChatAsistente(prev => [...prev, { emisor: 'user', texto: textoUser }]);
         setConsultaAsistente('');
 
@@ -289,9 +277,6 @@
         }, 500); 
       };
 
-      // ==========================================
-      // REEMBOLSOS Y DESCUENTOS SEGUROS
-      // ==========================================
       const procesarDescuentoSeguro = (walletId, montoGasto, monedaGasto, activosActuales) => {
         const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
@@ -381,25 +366,6 @@
         }
       };
 
-      const procesarEdicionGastoPuntual = (e) => {
-        e.preventDefault();
-        const gastoOriginal = db.gastosPuntuales.find(g => g.id === editandoGastoPuntual.id);
-        const activosReembolsados = procesarReembolsoWallet(gastoOriginal.walletIdOriginal, gastoOriginal.monto, gastoOriginal.moneda, db.activos);
-        const operacionNuevoDescuento = procesarDescuentoSeguro(editandoGastoPuntual.walletIdOriginal, editandoGastoPuntual.monto, editandoGastoPuntual.moneda, activosReembolsados);
-        
-        if (!operacionNuevoDescuento.success) { return alert(operacionNuevoDescuento.msg + " (El gasto original no se modificó)."); }
-
-        const nombreWalletNueva = operacionNuevoDescuento.activosActualizados.find(w => w.id === parseInt(editandoGastoPuntual.walletIdOriginal))?.nombre;
-        const gastosPuntualesActualizados = db.gastosPuntuales.map(g => {
-            if (g.id === editandoGastoPuntual.id) return { ...g, concepto: editandoGastoPuntual.concepto, monto: parseFloat(editandoGastoPuntual.monto), moneda: editandoGastoPuntual.moneda, walletIdOriginal: parseInt(editandoGastoPuntual.walletIdOriginal), pagadoCon: nombreWalletNueva };
-            return g;
-        });
-
-        const log = generarLog('Editó Gasto Suelto', `Editó gasto de "${gastoOriginal.concepto}" a "${editandoGastoPuntual.concepto}". Modificó monto de ${gastoOriginal.monto} a ${editandoGastoPuntual.monto}.`, { original: gastoOriginal, nuevo: editandoGastoPuntual });
-        guardarEnNube({ ...db, activos: operacionNuevoDescuento.activosActualizados, gastosPuntuales: gastosPuntualesActualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setEditandoGastoPuntual(null);
-      };
-
       const agregarGastoFijo = (e) => {
         e.preventDefault();
         const item = { 
@@ -426,7 +392,6 @@
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
-      // --- DEUDAS A OTROS Y PAGO MULTIMONEDA ---
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
@@ -464,7 +429,7 @@
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abonoConvertido;
         let deudasActualizadas = [];
         if (nuevoMontoDeuda <= 0.05) deudasActualizadas = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
-        else deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(4) } : d);
+        else deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(4) } : d); 
 
         const walletUsada = operacion.activosActualizados.find(w => w.id === parseInt(pagoDeudaActivo.walletId))?.nombre;
         const log = generarLog('Abonó a Deuda', `Pagó ${abonoFisicoEntregado} ${pagoDeudaActivo.monedaAbono} a "${itemDeuda.acreedor}" desde la billetera ${walletUsada}. Restan ${nuevoMontoDeuda.toFixed(2)} ${itemDeuda.moneda}.`);
@@ -473,8 +438,6 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
       };
 
-
-      // --- MÓDULO CUENTAS A COBRAR (UNIFICADAS) ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -519,7 +482,7 @@
 
         const abonoBaseUSD = aUSDBase(cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.cotizacionDolar);
         
-        if (abonoBaseUSD > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
+        if (redondear(abonoBaseUSD) > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar más dinero del que te deben en total.');
 
         const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroEntregadoFisico, cobroDeudaActivo.monedaCobro, db.activos);
         
@@ -578,7 +541,7 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
-      // --- MÓDULO VENTAS (CORREGIDO PARA AGRUPAR POR DÍA) ---
+      // --- VENTAS ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
@@ -632,7 +595,7 @@
           }
       };
 
-      // --- MÓDULO TALLER Y REPARACIONES ---
+      // --- MÓDULO TALLER Y REPARACIONES CON ENLACE DE STOCK ---
       const agregarReparacion = (e) => {
           e.preventDefault();
           if (nuevaReparacion.imei.length !== 15) return alert('Error: El IMEI debe tener exactamente 15 números.');
@@ -681,6 +644,7 @@
           }
       };
 
+      // FINALIZAR Y ENLAZAR CON STOCK
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto a cobrar.');
@@ -691,7 +655,24 @@
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
           if (!equipo) return alert('Error: Equipo no encontrado en el taller.');
 
-          // GUARDADO INTERNO: Alta Precisión (Doble guardado para evitar desfasaje de centavos)
+          // GESTIÓN DEL STOCK: Si seleccionó un repuesto, descontarlo
+          let stockActualizado = db.stock || [];
+          let costoRepuestoUSD = 0;
+          let nombreRepuesto = null;
+
+          if (nuevaReparacionFinalizada.repuestoId) {
+              const repuesto = stockActualizado.find(s => s.id === parseInt(nuevaReparacionFinalizada.repuestoId));
+              if (!repuesto || repuesto.cantidad < 1) {
+                  return alert('El repuesto seleccionado ya no tiene stock disponible. Por favor, ingresá stock primero.');
+              }
+              // Calculamos su costo base en USD para calcular ganancia neta pura
+              costoRepuestoUSD = aUSDBase(repuesto.monto, repuesto.moneda, db.cotizacionDolar);
+              nombreRepuesto = repuesto.concepto;
+              
+              // Restamos 1 unidad del array de stock
+              stockActualizado = stockActualizado.map(s => s.id === repuesto.id ? { ...s, cantidad: s.cantidad - 1 } : s);
+          }
+
           const montoFisico = montoFin;
           const monedaFisica = nuevaReparacionFinalizada.monedaCobro;
           const montoBaseUSD = aUSDBase(montoFin, monedaFisica, db.cotizacionDolar);
@@ -699,6 +680,10 @@
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
               equipoOriginal: equipo, 
+              
+              repuestoUsado: nombreRepuesto,
+              costoRepuestoUSD: costoRepuestoUSD, // Para la ganancia neta
+
               montoCobradoOriginal: montoFisico, 
               monedaCobroOriginal: monedaFisica,
               montoCobrado: montoBaseUSD, 
@@ -710,8 +695,10 @@
           const reparacionesFinActualizadas = [registroFin, ...(db.reparacionesFin || [])];
           const tallerActualizado = (db.taller || []).filter(e => e.id !== equipo.id);
 
-          let dbUpdates = { taller: tallerActualizado, reparacionesFin: reparacionesFinActualizadas };
+          let dbUpdates = { taller: tallerActualizado, reparacionesFin: reparacionesFinActualizadas, stock: stockActualizado };
           let log;
+
+          const textoRepuestoLog = nombreRepuesto ? ` Usó repuesto: ${nombreRepuesto}.` : '';
 
           if (equipo.origen === 'gremio') {
               let deudasCobrarActualizadas = [...(db.deudasCobrar || [])];
@@ -727,13 +714,13 @@
                   deudasCobrarActualizadas.unshift(itemCobrar);
               }
               dbUpdates.deudasCobrar = deudasCobrarActualizadas;
-              log = generarLog('Finalizó Reparación Gremio', `Finalizó ${equipo.modelo} de ${equipo.gremio}. Se sumaron ${montoFisico} ${monedaFisica} a sus Cuentas por Cobrar.`, registroFin);
+              log = generarLog('Finalizó Reparación Gremio', `Finalizó ${equipo.modelo} de ${equipo.gremio}.${textoRepuestoLog} Se sumaron ${montoFisico} ${monedaFisica} a Cuentas por Cobrar.`, registroFin);
           } else {
-              log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}. Quedó pendiente de pago por ${montoFisico} ${monedaFisica}.`, registroFin);
+              log = generarLog('Finalizó Reparación Cliente', `Finalizó ${equipo.modelo} de ${equipo.clienteNombre}.${textoRepuestoLog} Pendiente de pago por ${montoFisico} ${monedaFisica}.`, registroFin);
           }
 
           guardarEnNube({ ...db, ...dbUpdates, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
       };
 
       const cobrarReparacionClienteParcial = (e, itemReparacion) => {
@@ -777,13 +764,13 @@
       };
 
       const eliminarReparacionHistorial = (itemRep) => {
-          if (window.confirm("¿Seguro querés eliminar este registro histórico? OJO: Si ya lo cobraste, esto NO restará la plata de tus cuentas, solo borrará el papel virtual.")) {
+          if (window.confirm("¿Seguro querés eliminar este registro histórico? OJO: Si ya lo cobraste, esto NO restará la plata de tus cuentas, y NO te devuelve el repuesto al stock.")) {
               const log = generarLog('Eliminó Historial de Reparación', `Borró el historial del ${itemRep.equipoOriginal.modelo}.`);
               guardarEnNube({ ...db, reparacionesFin: db.reparacionesFin.filter(v => v.id !== itemRep.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           }
       };
 
-      // --- CÁLCULOS TOTALES DASHBOARD Y VENTAS HISTÓRICAS (Semana/Mes) ---
+      // --- CÁLCULOS TOTALES DASHBOARD Y VENTAS HISTÓRICAS ---
       const totalBilleterasUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalActivosFisicosUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
@@ -798,32 +785,35 @@
       const dayOfWeek = now.getDay() || 7;
       const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1).getTime();
 
-      let totalVentasHistoricasUSD = 0;
-      let totalVentasMesUSD = 0;
-      let totalVentasSemanaUSD = 0;
-      let totalEquiposVendidos = 0;
+      let totalVentasHistoricasUSD = 0; let totalVentasMesUSD = 0; let totalVentasSemanaUSD = 0; let totalEquiposVendidos = 0;
 
       (db.ventas || []).forEach(item => {
           const usd = item.moneda === 'USD' ? parseFloat(item.totalComision) : parseFloat(item.totalComision) / db.cotizacionDolar;
           totalVentasHistoricasUSD += usd;
           totalEquiposVendidos += parseInt(item.cantidad);
-          
           let ts = item.fechaTimestamp;
-          if (!ts && item.fecha) {
-              const partes = item.fecha.split('/');
-              if(partes.length === 3) ts = new Date(partes[2], partes[1] - 1, partes[0]).getTime();
-          }
+          if (!ts && item.fecha) { const partes = item.fecha.split('/'); if(partes.length === 3) ts = new Date(partes[2], partes[1] - 1, partes[0]).getTime(); }
           if (ts >= startOfMonth) totalVentasMesUSD += usd;
           if (ts >= startOfWeek) totalVentasSemanaUSD += usd;
       });
       
-      const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
+      // LA MAGIA DE LA GANANCIA NETA
+      const totalGananciaNetaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
           const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
           const cobradoReal = parseFloat(item.montoCobrado) - adeudado; // Base original USD
-          return acc + (cobradoReal > 0 ? cobradoReal : 0);
+          // Si el cliente no pagó ni para cubrir el repuesto, la ganancia neta puede dar temporalmente negativa. ¡Contabilidad real!
+          const costoRepuesto = parseFloat(item.costoRepuestoUSD) || 0;
+          const gananciaNeta = cobradoReal - costoRepuesto; 
+          return acc + gananciaNeta;
       }, 0);
 
-      const patrimonioNetoRealUSD = totalBilleterasUSD + totalActivosFisicosUSD + totalStockUSD - totalDeudasPendientesUSD;
+      // Agregamos las reparaciones pendientes de clientes (que no están en cuentas por cobrar) al patrimonio para que no baje al gastar el repuesto
+      const totalCobrosPendientesTallerUSD = (db.reparacionesFin || []).reduce((acc, item) => {
+          if (item.estadoCobro === 'pendiente') return acc + (parseFloat(item.montoAdeudadoRestante) || 0);
+          return acc;
+      }, 0);
+
+      const patrimonioNetoRealUSD = totalBilleterasUSD + totalActivosFisicosUSD + totalStockUSD + totalDeudasCobrarUSD + totalCobrosPendientesTallerUSD - totalDeudasPendientesUSD;
 
       const gastosPorCategoria = useMemo(() => {
         const sumas = {};
@@ -941,7 +931,7 @@
                   <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl lg:col-span-3 xl:col-span-1">
                     <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 relative z-10"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
                     <h2 className={`text-4xl font-black relative z-10 ${patrimonioNetoRealUSD >= 0 ? 'text-white' : 'text-rose-400'}`}>{patrimonioNetoRealUSD < 0 ? '-' : ''}{formatDinero(Math.abs(convertirParaMostrar(patrimonioNetoRealUSD, 'USD')))}</h2>
-                    <p className="text-slate-400 text-[10px] uppercase font-bold mt-2">Suma de todo - Deudas a otros</p>
+                    <p className="text-slate-400 text-[10px] uppercase font-bold mt-2">Cuentas + Stock + Deudas otros + Taller - Tus deudas</p>
                   </div>
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                     <p className="text-xs font-bold text-emerald-500 uppercase tracking-widest mb-3"><i className="fa-solid fa-money-bill-wave mr-2"></i>Dinero Líquido</p>
@@ -960,8 +950,8 @@
                   </div>
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                     <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-hand-holding-dollar mr-2"></i>Plata en la calle</p>
-                    <h2 className="text-3xl font-black text-indigo-400">{formatDinero(convertirParaMostrar(totalDeudasCobrarUSD, 'USD'))}</h2>
-                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Cuentas por Cobrar a otros</p>
+                    <h2 className="text-3xl font-black text-indigo-400">{formatDinero(convertirParaMostrar(totalDeudasCobrarUSD + totalCobrosPendientesTallerUSD, 'USD'))}</h2>
+                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Cuentas por Cobrar a otros + Taller</p>
                   </div>
                 </div>
 
@@ -1195,11 +1185,9 @@
               </div>
             )}
 
-            {/* VISTA 3: VENTAS Y COMISIONES (CON NUEVO DASHBOARD TRIPLE Y AGRUPACIÓN DIARIA) */}
+            {/* VISTA 3: VENTAS Y COMISIONES */}
             {vista === 'ventas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
-                
-                {/* NUEVO DASHBOARD TRIPLE */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-6 shadow-xl text-center">
                     <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-calendar-week mr-2"></i>Esta Semana</p>
@@ -1215,7 +1203,6 @@
                     <p className="text-slate-400 text-[10px] font-mono mt-3">({totalEquiposVendidos} equipos)</p>
                   </div>
                 </div>
-
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Registrar Ventas del Día</h3>
@@ -1223,7 +1210,7 @@
                   <form onSubmit={registrarVenta} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-4 shadow-inner">
                     <div className="flex gap-4 items-center">
                         <div className="flex-1">
-                            <label className="text-xs text-slate-400 font-bold block mb-1">Equipos Vendidos Ahora</label>
+                            <label className="text-xs text-slate-400 font-bold block mb-1">Equipos Vendidos Hoy</label>
                             <input type="number" min="1" required value={nuevaVenta.cantidad} onChange={e => setNuevaVenta({...nuevaVenta, cantidad: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-center text-lg" />
                         </div>
                         <div className="flex-1">
@@ -1237,19 +1224,19 @@
                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl transition text-base">Registrar y Sumar a "Por Cobrar"</button>
                   </form>
                   <div className="space-y-4 pt-4">
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico (Agrupado por día)</h4>
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico</h4>
                     {(db.ventas || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.ventas || []).map(item => (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                         <div>
                           <p className="font-black text-white text-lg">{item.fecha}</p>
-                          <p className="text-xs text-slate-500 mt-1">Total de equipos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
+                          <p className="text-xs text-slate-500 mt-1">Vendidos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
-                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Total acumulado del día</p>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Total de ese día</p>
                             <span className="font-mono font-black text-emerald-500 text-2xl">+{formatDinero(convertirParaMostrar(item.totalComision, item.moneda))}</span>
                           </div>
-                          <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors" title="Borrar toda la venta del día"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors"><i className="fa-solid fa-trash"></i></button>
                         </div>
                       </div>
                     ))}
@@ -1366,13 +1353,13 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS (CON AUTOCOMPLETADO LIBRE Y DESCUENTO DE STOCK) */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
-                  <p className="text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-clipboard-check mr-2"></i>Histórico Ganancias de Taller</p>
-                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalGananciaReparacionesUSD, 'USD'))}</h2>
-                  <p className="text-slate-400 text-xs font-mono mt-3">Refleja lo que efectivamente ya te pagaron.</p>
+                  <p className="text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-clipboard-check mr-2"></i>Ganancia Neta de Taller</p>
+                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalGananciaNetaReparacionesUSD, 'USD'))}</h2>
+                  <p className="text-slate-400 text-xs font-mono mt-3">Cobrado real menos el costo de repuestos.</p>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
@@ -1386,18 +1373,27 @@
                         <select required value={nuevaReparacionFinalizada.idEquipoTaller} onChange={e => {
                             const idTaller = e.target.value;
                             if (!idTaller) {
-                                setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
+                                setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
                                 return;
                             }
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
-                                setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
+                                setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS', repuestoId: '' });
                             } else {
-                                setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS' });
+                                setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
                             }
                         }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm font-bold focus:outline-none focus:border-cyan-500">
                             <option value="">-- Seleccionar Equipo del Taller --</option>
                             {(db.taller || []).map(t => <option key={t.id} value={t.id}>{t.modelo} - {t.origen === 'cliente' ? t.clienteNombre : t.gremio}</option>)}
+                        </select>
+                    </div>
+                    
+                    {/* NUEVO: SELECCIÓN DE REPUESTO */}
+                    <div>
+                        <label className="text-xs text-amber-400 font-bold block mb-1">Repuesto Utilizado (Opcional - Resta del Stock)</label>
+                        <select value={nuevaReparacionFinalizada.repuestoId || ''} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, repuestoId: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-amber-500">
+                            <option value="">-- Ninguno / No usé repuesto --</option>
+                            {(db.stock || []).filter(s => s.cantidad > 0).map(s => <option key={s.id} value={s.id}>{s.concepto} (Disp: {s.cantidad})</option>)}
                         </select>
                     </div>
 
@@ -1427,6 +1423,12 @@
                     {(db.reparacionesFin || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.reparacionesFin || []).map(item => {
                         const esPendiente = item.estadoCobro === 'pendiente';
                         
+                        // Cálculo de Ganancia Neta Visual para esta tarjeta
+                        const adeudadoV = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
+                        const totalFacturadoUSD = item.montoCobrado; // En base USD
+                        const costoRepuestoUSD = item.costoRepuestoUSD || 0;
+                        const gananciaNetaEstimadaUSD = totalFacturadoUSD - costoRepuestoUSD;
+
                         return (
                           <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                             <div className="flex-1 w-full">
@@ -1435,6 +1437,9 @@
                                   <span className="bg-slate-800 text-slate-400 px-2 py-0.5 rounded text-[10px] font-mono">IMEI: {item.equipoOriginal.imei}</span>
                               </div>
                               <p className="text-xs text-slate-400 mt-1">Reparación: <strong className="text-slate-300">{item.equipoOriginal.falla}</strong></p>
+                              {item.repuestoUsado && (
+                                  <p className="text-xs text-amber-400 mt-1"><i className="fa-solid fa-box mr-1"></i> Repuesto: {item.repuestoUsado} (Costo: {formatDinero(convertirParaMostrar(item.costoRepuestoUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)})</p>
+                              )}
                               <p className="text-xs text-slate-500 mt-1">Cliente: {item.equipoOriginal.origen === 'cliente' ? item.equipoOriginal.clienteNombre : item.equipoOriginal.gremio} • Fin: {item.fecha}</p>
                               
                               <div className="mt-3">
@@ -1450,8 +1455,16 @@
                             
                             <div className="flex flex-col items-end gap-3 min-w-[150px] w-full md:w-auto">
                               <div className="text-right w-full">
-                                <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Precio Total</p>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Cobro Total</p>
                                 <span className="font-mono font-black text-cyan-400 text-2xl">{formatDinero(convertirParaMostrar(item.montoCobradoOriginal, item.monedaCobroOriginal, item.monedaCobroOriginal), item.monedaCobroOriginal)}</span>
+                                
+                                <div className="mt-1 pt-1 border-t border-slate-800/50">
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase">Ganancia Neta (Bruto - Repuesto)</p>
+                                  <span className="font-mono font-bold text-white text-sm">
+                                      {formatDinero(convertirParaMostrar(gananciaNetaEstimadaUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)}
+                                  </span>
+                                </div>
+
                                 {esPendiente && (
                                     <div className="mt-1 pt-1 border-t border-slate-800/50">
                                         <p className="text-[10px] text-rose-400 font-bold uppercase">Falta pagar</p>
@@ -1530,7 +1543,6 @@
                             <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
                           </div>
                           <div className="text-right">
-                            {/* Mostrar saldo de deuda unificada exacto en la moneda que se esté visualizando */}
                             <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda, monedaVisual), monedaVisual)}</span>
                           </div>
                         </div>
