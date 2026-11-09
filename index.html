@@ -42,9 +42,6 @@
       }
     }
 
-    // ==========================================
-    // 1. CONEXIÓN A BASE DE DATOS
-    // ==========================================
     const SUPABASE_URL = "https://nbluvlbsuvmkcaflmjei.supabase.co";
     const SUPABASE_KEY = "sb_publishable_IuVcRy48mLa5P02gRC7B_Q_tI3C6Wuk";
     
@@ -72,13 +69,12 @@
       const [db, setDb] = useState(DB_TEMPLATE);
       const [vista, setVista] = useState('patrimonio'); 
 
-      // ESTADOS GLOBALES DE LA APP
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      // ESTADOS DE FORMULARIOS PATRIMONIALES Y VENTAS
+      // ESTADOS DE FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
@@ -93,8 +89,9 @@
       // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
+      
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
-      const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '' });
+      const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '' }); // NUEVO: Estado para pagos parciales de clientes
 
       // ESTADOS UI DE MODALES
       const [editandoDolar, setEditandoDolar] = useState(false);
@@ -498,7 +495,6 @@
 
       const agregarStock = (e) => {
         e.preventDefault();
-        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -597,7 +593,13 @@
           const propietarioLog = nuevaReparacion.origen === 'cliente' ? itemTaller.clienteNombre : itemTaller.gremio;
           const log = generarLog('Ingresó Equipo a Taller', `Ingresó un ${itemTaller.modelo} (${itemTaller.origen}: ${propietarioLog}). Falla: ${itemTaller.falla}`, itemTaller);
 
-          guardarEnNube({ ...db, taller: [itemTaller, ...(db.taller || [])], historiaGremios: nuevosGremios, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          guardarEnNube({ 
+              ...db, 
+              taller: [itemTaller, ...(db.taller || [])], 
+              historiaGremios: nuevosGremios,
+              actividad: [log, ...(db.actividad || [])].slice(0, 500) 
+          });
+
           setNuevaReparacion({ origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
           setMostrarInputGremioLibre(false);
       };
@@ -609,7 +611,7 @@
           }
       };
 
-      // FINALIZAR REPARACIÓN (CON AUTOCOMPLETADO LIBRE SIN CANDADO)
+      // FINALIZAR REPARACIÓN (CON AUTOCOMPLETADO LIBRE Y MULTIMONEDA EN VIVO)
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y poné el monto a cobrar.');
@@ -623,6 +625,7 @@
           const registroFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), 
               equipoOriginal: equipo, montoCobrado: montoFin, monedaCobro: nuevaReparacionFinalizada.monedaCobro,
+              montoAdeudadoRestante: montoFin, // NUEVO: Inicialmente se debe todo el arreglo
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar'
           };
           
@@ -655,24 +658,38 @@
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS' });
       };
 
-      const cobrarReparacionCliente = (e, itemReparacion) => {
+      // MAGIA: COBRO PARCIAL (MULTIBILLETERA Y MULTIMONEDA)
+      const cobrarReparacionClienteParcial = (e, itemReparacion) => {
           e.preventDefault();
-          if (!panelCobroReparacion.walletId) return alert('Elegí a qué billetera entra la plata del cliente.');
+          if (!panelCobroReparacion.walletId || !panelCobroReparacion.montoCobro) return alert('Elegí a qué billetera entra la plata y cuánto te dio.');
+          const montoQueDaElCliente = parseFloat(panelCobroReparacion.montoCobro);
+          if (montoQueDaElCliente <= 0) return alert('Monto inválido.');
 
-          const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, itemReparacion.montoCobrado, itemReparacion.monedaCobro, db.activos);
+          // 1. Mete la plata a la billetera (respetando la moneda del cobro, no del original)
+          // Asumimos por ahora que te paga en la misma moneda en la que le finalizaste la reparación para no enroscar
+          const monedaDePago = itemReparacion.monedaCobro; 
+          const activosConCobro = procesarReembolsoWallet(panelCobroReparacion.walletId, montoQueDaElCliente, monedaDePago, db.activos);
           
+          // 2. Calcula cuánto falta
+          const adeudadoActual = itemReparacion.montoAdeudadoRestante !== undefined ? itemReparacion.montoAdeudadoRestante : itemReparacion.montoCobrado;
+          const nuevoRestante = parseFloat(adeudadoActual) - montoQueDaElCliente;
+          
+          if (nuevoRestante < -0.05) return alert('El cliente te está dando más plata de la que debe en esta reparación.');
+
           const reparacionesFinActualizadas = (db.reparacionesFin || []).map(r => {
               if (r.id === itemReparacion.id) {
-                  return { ...r, estadoCobro: 'cobrado', walletIdCobro: parseInt(panelCobroReparacion.walletId) };
+                  const estadoFinal = nuevoRestante <= 0.05 ? 'cobrado' : 'pendiente';
+                  return { ...r, montoAdeudadoRestante: nuevoRestante, estadoCobro: estadoFinal };
               }
               return r;
           });
 
           const walletUsada = activosConCobro.find(w => w.id === parseInt(panelCobroReparacion.walletId))?.nombre;
-          const log = generarLog('Cobró Reparación Cliente', `Recibió el pago de ${itemReparacion.montoCobrado} ${itemReparacion.monedaCobro} por el ${itemReparacion.equipoOriginal.modelo} de ${itemReparacion.equipoOriginal.clienteNombre}. Dinero en ${walletUsada}.`);
+          const estadoLog = nuevoRestante <= 0.05 ? 'Canceló el total.' : `Aún debe ${nuevoRestante} ${monedaDePago}.`;
+          const log = generarLog('Cobró Reparación Cliente', `Recibió un pago de ${montoQueDaElCliente} ${monedaDePago} por el ${itemReparacion.equipoOriginal.modelo}. ${estadoLog} Entró a: ${walletUsada}.`);
 
           guardarEnNube({ ...db, activos: activosConCobro, reparacionesFin: reparacionesFinActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setPanelCobroReparacion({ idReparacion: null, walletId: '' });
+          setPanelCobroReparacion({ idReparacion: null, walletId: '', montoCobro: '' });
       };
 
       const eliminarReparacionHistorial = (itemRep) => {
@@ -695,7 +712,13 @@
       const totalVentasHistoricasUSD = (db.ventas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.totalComision):parseFloat(item.totalComision)/db.cotizacionDolar), 0);
       const totalEquiposVendidos = (db.ventas || []).reduce((acc, item) => acc + parseInt(item.cantidad), 0);
       
-      const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => acc + (item.monedaCobro==='USD'?parseFloat(item.montoCobrado):parseFloat(item.montoCobrado)/db.cotizacionDolar), 0);
+      // Ganancia de Reparaciones ahora solo suma lo que realmente cobraste (Monto original - Monto que te deben todavía)
+      const totalGananciaReparacionesUSD = (db.reparacionesFin || []).reduce((acc, item) => {
+          const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0; // Si es viejo y no tiene el campo, asumimos 0 de deuda
+          const cobradoReal = parseFloat(item.montoCobrado) - adeudado;
+          const enUSD = item.monedaCobro === 'USD' ? cobradoReal : cobradoReal / db.cotizacionDolar;
+          return acc + (enUSD > 0 ? enUSD : 0);
+      }, 0);
 
       const patrimonioNetoRealUSD = totalBilleterasUSD + totalActivosFisicosUSD + totalStockUSD - totalDeudasPendientesUSD;
 
@@ -727,7 +750,9 @@
         return (
           <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4">
             <form onSubmit={login} className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-sm w-full space-y-6 shadow-2xl fade-in">
-              <div className="text-center space-y-2"><i className="fa-solid fa-fingerprint text-5xl text-blue-500 mb-3"></i><h1 className="text-3xl font-black text-white">Patrimonio</h1><p className="text-slate-400 text-sm font-bold tracking-widest uppercase">Acceso Privado</p></div>
+              <div className="text-center space-y-2">
+                <i className="fa-solid fa-fingerprint text-5xl text-blue-500 mb-3"></i><h1 className="text-3xl font-black text-white">Patrimonio</h1><p className="text-slate-400 text-sm font-bold tracking-widest uppercase">Acceso Privado</p>
+              </div>
               <div>
                 <input type="password" required placeholder="Tu clave..." value={passInput} onChange={e => {setPassInput(e.target.value); setErrorLogin('');}} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-4 text-center text-2xl font-mono text-white tracking-widest focus:outline-none focus:border-blue-500" />
                 {errorLogin && <p className="text-rose-400 text-xs font-bold text-center mt-3">{errorLogin}</p>}
@@ -1205,7 +1230,7 @@
                                               <p className="text-xs text-slate-400"><strong className="text-slate-500 uppercase tracking-wider text-[9px] block mb-0.5">Estado Visual:</strong> {item.estadoVisual}</p>
                                               {item.origen === 'cliente' && (
                                                   <div className="mt-2 border-t border-slate-800 pt-2">
-                                                    {item.presupuesto ? (isNaN(parseFloat(item.presupuesto)) ? <p className="text-xs text-emerald-400 font-mono">Presupuesto: {item.presupuesto}</p> : <p className="text-xs text-emerald-400 font-mono">Presupuesto: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))} {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}</p>) : <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>}
+                                                    {item.presupuesto ? <p className="text-xs text-emerald-400 font-mono">Presupuesto Estimado: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))} {!modoPrivado && <span className="text-[9px] text-slate-500 ml-2">Base: {item.presupuesto} {item.presupuestoMoneda || 'ARS'}</span>}</p> : <p className="text-xs text-amber-400 font-mono">Presupuesto: A confirmar</p>}
                                                   </div>
                                               )}
                                           </div>
@@ -1225,7 +1250,7 @@
               </div>
             )}
 
-            {/* VISTA 8: REPARACIONES FINALIZADAS (AUTOCOMPLETADO LIBRE) */}
+            {/* VISTA 8: REPARACIONES FINALIZADAS */}
             {vista === 'reparacionesFin' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1248,7 +1273,6 @@
                                 return;
                             }
                             const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
-                            // Autocompleta pero deja las cajas libres para edición directa
                             if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
                                 setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS' });
                             } else {
@@ -1263,8 +1287,19 @@
                     <div>
                         <label className="text-xs text-slate-400 font-bold block mb-1">Monto a Cobrar (Ganancia final)</label>
                         <div className="flex">
-                            <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
-                            <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                            {/* Convertidor automático de moneda al tipear (Caja libre) */}
+                            <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
+                            <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
+                                const nuevaMoneda = e.target.value;
+                                const monedaActual = nuevaReparacionFinalizada.monedaCobro;
+                                let nuevoMonto = nuevaReparacionFinalizada.montoCobrado;
+                                
+                                if(nuevoMonto) {
+                                    if(nuevaMoneda === 'ARS' && monedaActual === 'USD') nuevoMonto = (parseFloat(nuevoMonto) * db.cotizacionDolar).toFixed(2);
+                                    if(nuevaMoneda === 'USD' && monedaActual === 'ARS') nuevoMonto = (parseFloat(nuevoMonto) / db.cotizacionDolar).toFixed(2);
+                                }
+                                setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: nuevaMoneda, montoCobrado: nuevoMonto});
+                            }} className="bg-slate-900 border border-slate-700 rounded-r-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
                         </div>
                     </div>
                     
@@ -1302,18 +1337,19 @@
                               </div>
 
                               {esPendiente && panelCobroReparacion.idReparacion !== item.id && (
-                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Cobrar</button>
+                                  <button onClick={() => setPanelCobroReparacion({ idReparacion: item.id, walletId: '' })} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-xl transition text-sm">Cobrar (Abonar)</button>
                               )}
 
                               {panelCobroReparacion.idReparacion === item.id && (
                                   <div className="bg-slate-900 p-3 rounded-xl border border-cyan-500/50 flex flex-col gap-2 fade-in w-full">
+                                    <input type="number" step="any" placeholder="Monto entregado" value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white font-mono" />
                                     <select value={panelCobroReparacion.walletId} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white">
                                       <option value="">¿A qué billetera entró?</option>
                                       {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                                     </select>
                                     <div className="flex gap-2">
-                                      <button onClick={(e) => cobrarReparacionCliente(e, item)} className="flex-1 bg-emerald-600 text-white font-bold px-2 py-2 rounded-lg text-xs">Confirmar</button>
-                                      <button onClick={() => setPanelCobroReparacion({idReparacion: null, walletId: ''})} className="bg-slate-800 text-white px-2 py-2 rounded-lg text-xs">X</button>
+                                      <button onClick={(e) => cobrarReparacionClienteParcial(e, item)} className="flex-1 bg-emerald-600 text-white font-bold px-2 py-2 rounded-lg text-xs">Confirmar</button>
+                                      <button onClick={() => setPanelCobroReparacion({idReparacion: null, walletId: '', montoCobro: ''})} className="bg-slate-800 text-white px-2 py-2 rounded-lg text-xs">X</button>
                                     </div>
                                   </div>
                               )}
@@ -1421,14 +1457,14 @@
                     <div className="flex gap-2">
                       <select required value={nuevaDeudaCobrar.walletId} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none">
                         <option value="">¿De qué billetera le prestaste la plata?</option>
-                        {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre}</option>)}
+                        {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
                       </select>
                       <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition">Prestar Plata</button>
                     </div>
                   </form>
                   <div className="space-y-4 pt-4">
                     {(db.deudasCobrar || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay cuentas por cobrar.</p> : db.deudasCobrar.map(item => {
-                      const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(Date.now());
+                      const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(item.id);
                       const colorDias = diasPasados > 30 ? 'text-rose-400' : 'text-emerald-400';
                       return (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-md hover:border-slate-700 transition">
