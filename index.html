@@ -53,7 +53,7 @@
       if (window.supabase) supaClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     } catch (err) { console.error("Error iniciando Supabase:", err); }
 
-    const DB_TEMPLATE = { cotizacionDolar: 1500, activos: [], gastosFijos: [], gastosPuntuales: [], deudas: [] };
+    const DB_TEMPLATE = { cotizacionDolar: 1500, activos: [], gastosFijos: [], gastosPuntuales: [], deudas: [], stock: [] };
 
     function App() {
       const [isLoaded, setIsLoaded] = useState(false);
@@ -62,7 +62,7 @@
       const [errorLogin, setErrorLogin] = useState('');
 
       const [db, setDb] = useState(DB_TEMPLATE);
-      const [vista, setVista] = useState('patrimonio'); // Navegación de barra lateral
+      const [vista, setVista] = useState('patrimonio');
 
       // ESTADOS DE FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
@@ -70,6 +70,10 @@
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', monto: '', moneda: 'USD' });
+      
+      // ESTADOS DEL NUEVO STOCK
+      const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
+      const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
 
       // ESTADOS UI
       const [editandoDolar, setEditandoDolar] = useState(false);
@@ -79,14 +83,22 @@
       
       const [editandoActivo, setEditandoActivo] = useState(null);
       const [editandoFijo, setEditandoFijo] = useState(null);
+      const [editandoDeuda, setEditandoDeuda] = useState(null);
+      const [editandoStock, setEditandoStock] = useState(null);
 
+      // MEMORIAS DE CONCEPTOS (AUTOCOMPLETADO)
       const opcionesConcepto = useMemo(() => {
         const defaults = ['Kiosco', 'Uber / Taxi', 'Comida / Delivery', 'Fútbol / Deportes', 'Supermercado', 'Combustible'];
         const historicos = (db.gastosPuntuales || []).map(g => g.concepto);
         return [...new Set([...defaults, ...historicos])];
       }, [db.gastosPuntuales]);
 
-      // Filtrar solo billeteras reales para pagos (ignorar iPhone, Auto, etc.)
+      const opcionesStock = useMemo(() => {
+        const defaults = ['Batería iPhone 11', 'Batería iPhone 12', 'Batería iPhone 13', 'Módulo iPhone 11', 'Templado'];
+        const historicos = (db.stock || []).map(s => s.concepto);
+        return [...new Set([...defaults, ...historicos])];
+      }, [db.stock]);
+
       const billeterasDisponibles = useMemo(() => {
         return (db.activos || []).filter(a => a.tipo !== 'activo');
       }, [db.activos]);
@@ -106,7 +118,8 @@
                 activos: Array.isArray(data.payload.activos) ? data.payload.activos.filter(Boolean) : [],
                 gastosFijos: Array.isArray(data.payload.gastosFijos) ? data.payload.gastosFijos.filter(Boolean) : [],
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
-                deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : []
+                deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
+                stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean) : []
               });
             }
           } catch (err) { console.error("Iniciando de cero."); }
@@ -149,11 +162,9 @@
         const wallet = activosClon[idx];
         let montoARestar = parseFloat(montoGasto);
         
-        // Conversión inteligente de divisas
         if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
         if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
         
-        // BLOQUEO DE SALDO NEGATIVO (Verificación Matemática)
         if (parseFloat(wallet.monto) < montoARestar) {
             return { 
                 success: false, 
@@ -165,7 +176,7 @@
         return { success: true, activosActualizados: activosClon };
       };
 
-      // --- HANDLERS AGREGAR Y PAGAR ---
+      // --- HANDLERS PATRIMONIO ---
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre, monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
@@ -202,7 +213,6 @@
 
       const procesarPagoFijo = (itemFijo) => {
         if (!pagoActivo.walletId) return alert('Elegí una billetera para descontar el pago.');
-        
         const operacion = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda);
         if (!operacion.success) { return alert(operacion.msg); }
         
@@ -216,10 +226,26 @@
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
+      // --- HANDLERS DEUDAS ---
       const agregarDeuda = (e) => {
         e.preventDefault();
-        const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor, monto: parseFloat(nuevaDeuda.monto) || 0, moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
-        guardarEnNube({ ...db, deudas: [item, ...(db.deudas || [])] });
+        const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
+        
+        // SUMATORIA AUTOMÁTICA: Si la deuda con la misma persona y moneda ya existe, la sumamos.
+        let deudasActualizadas = [...(db.deudas || [])];
+        const idxExistente = deudasActualizadas.findIndex(d => 
+          d.acreedor.trim().toLowerCase() === nuevaDeuda.acreedor.trim().toLowerCase() && 
+          d.moneda === nuevaDeuda.moneda
+        );
+
+        if (idxExistente !== -1) {
+          deudasActualizadas[idxExistente].monto = (parseFloat(deudasActualizadas[idxExistente].monto) + montoNuevo).toFixed(2);
+        } else {
+          const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
+          deudasActualizadas.unshift(item);
+        }
+        
+        guardarEnNube({ ...db, deudas: deudasActualizadas });
         setNuevaDeuda({ acreedor: '', monto: '', moneda: 'USD' });
       };
 
@@ -229,15 +255,13 @@
         if (!abono || abono <= 0) return alert('Ingresá un monto válido a abonar.');
         if (abono > parseFloat(itemDeuda.monto)) return alert('No podés abonar más dinero del que debés.');
 
-        // Se verifica si la billetera tiene fondos suficientes y se resta
         const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abono, itemDeuda.moneda);
         if (!operacion.success) { return alert(operacion.msg); }
 
-        // Actualizamos o eliminamos la deuda
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abono;
         let deudasActualizadas = [];
         
-        if (nuevoMontoDeuda <= 0.05) { // Tolerancia para decimales, si se pagó entera, se borra de pendientes
+        if (nuevoMontoDeuda <= 0.05) {
             deudasActualizadas = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
         } else {
             deudasActualizadas = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
@@ -247,13 +271,48 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
       };
 
+      // --- HANDLERS STOCK ---
+      const agregarStock = (e) => {
+        e.preventDefault();
+        if (!nuevoStock.concepto) return alert('Ingresá el concepto del repuesto.');
+        
+        let stockActualizado = [...(db.stock || [])];
+        const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === nuevoStock.concepto.toLowerCase().trim());
+        
+        if (idx !== -1) {
+          // Si el repuesto ya existe, solo sumamos la cantidad y actualizamos el costo
+          stockActualizado[idx].cantidad = parseInt(stockActualizado[idx].cantidad) + parseInt(nuevoStock.cantidad);
+          stockActualizado[idx].monto = parseFloat(nuevoStock.monto) || 0;
+          stockActualizado[idx].moneda = nuevoStock.moneda;
+        } else {
+          // Si no existe, creamos el renglón nuevo
+          const item = { id: Date.now(), concepto: nuevoStock.concepto.trim(), cantidad: parseInt(nuevoStock.cantidad) || 1, monto: parseFloat(nuevoStock.monto) || 0, moneda: nuevoStock.moneda };
+          stockActualizado.unshift(item);
+        }
+        
+        guardarEnNube({ ...db, stock: stockActualizado });
+        setNuevoStock({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
+        setMostrarInputStockLibre(false);
+      };
+
+      const modificarCantidadStock = (id, delta) => {
+        const stockActualizado = (db.stock || []).map(s => {
+          if (s.id === id) {
+            const nuevaCant = Math.max(0, parseInt(s.cantidad) + delta);
+            return { ...s, cantidad: nuevaCant };
+          }
+          return s;
+        });
+        guardarEnNube({ ...db, stock: stockActualizado });
+      };
+
       // --- CÁLCULOS TOTALES ---
       const totalBilleterasYActivosUSD = (db.activos || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
+      const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + (calcularUSD(item.monto, item.moneda) * parseInt(item.cantidad)), 0);
       
-      // PATRIMONIO NETO REAL (Puede dar negativo)
       const patrimonioNetoRealUSD = totalBilleterasYActivosUSD - totalDeudasPendientesUSD;
 
       // ==========================================
@@ -286,7 +345,7 @@
           {/* ============================================== */}
           {/* BARRA LATERAL (MENU) */}
           {/* ============================================== */}
-          <aside className="w-full md:w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
+          <aside className="w-full md:w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-10">
             <div className="p-6 border-b border-slate-800 flex items-center gap-4">
               <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white text-xl shadow-lg"><i className="fa-solid fa-bolt"></i></div>
               <div>
@@ -297,10 +356,13 @@
             
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setVista('patrimonio')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'patrimonio' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <i className="fa-solid fa-wallet w-5 text-center"></i> Patrimonio y Billeteras
+                <i className="fa-solid fa-wallet w-5 text-center"></i> Patrimonio y Gastos
               </button>
               <button onClick={() => setVista('deudas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'deudas' ? 'bg-rose-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <i className="fa-solid fa-handshake w-5 text-center"></i> Deudas / Pasivos
+              </button>
+              <button onClick={() => setVista('stock')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'stock' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <i className="fa-solid fa-boxes-stacked w-5 text-center"></i> Stock Repuestos
               </button>
             </nav>
 
@@ -327,7 +389,9 @@
           {/* ============================================== */}
           <main className="flex-1 overflow-y-auto p-4 md:p-8 relative fade-in hide-scrollbar">
             
-            {/* VISTA 1: PATRIMONIO Y GASTOS */}
+            {/* ----------------------------------------------------- */}
+            {/* VISTA 1: PATRIMONIO Y GASTOS                          */}
+            {/* ----------------------------------------------------- */}
             {vista === 'patrimonio' && (
               <div className="max-w-6xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -360,11 +424,11 @@
                     
                     <form onSubmit={agregarActivo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                       <div className="flex gap-2">
-                        <select value={nuevoActivo.tipo} onChange={e => setNuevoActivo({...nuevoActivo, tipo: e.target.value})} className="w-1/2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-blue-500"><option value="billetera">Dinero Líquido</option><option value="activo">Objeto / Valor Físico</option></select>
-                        <input type="text" required placeholder="Nombre (Ej: Mercadopago o iPhone)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="w-1/2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" />
+                        <select value={nuevoActivo.tipo} onChange={e => setNuevoActivo({...nuevoActivo, tipo: e.target.value})} className="w-1/2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-blue-500"><option value="billetera">Dinero Líquido</option><option value="activo">Activo Físico</option></select>
+                        <input type="text" required placeholder="Nombre (Ej: Mercadopago)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="w-1/2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white focus:outline-none focus:border-blue-500 text-sm" />
                       </div>
                       <div className="flex gap-2">
-                        <input type="number" step="any" required placeholder="Valor inicial" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-blue-500 text-lg" />
+                        <input type="number" step="any" required placeholder="Valor" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-blue-500 text-lg" />
                         <select value={nuevoActivo.moneda} onChange={e => setNuevoActivo({...nuevoActivo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-blue-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                         <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                       </div>
@@ -394,7 +458,7 @@
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3">
                       <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-calendar-check text-amber-400 mr-2"></i>Fijos y Cuotas</h3>
-                      <p className="text-xs text-slate-400 mt-1">Se agregan acá y se descuentan al tocarlas.</p>
+                      <p className="text-xs text-slate-400 mt-1">Se descuentan al tocarlas.</p>
                     </div>
 
                     <form onSubmit={agregarGastoFijo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -467,7 +531,7 @@
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3">
                       <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-cart-shopping text-rose-400 mr-2"></i>Gastos Sueltos</h3>
-                      <p className="text-xs text-slate-400 mt-1">Se descuentan al instante de tu billetera.</p>
+                      <p className="text-xs text-slate-400 mt-1">Se descuentan al instante.</p>
                     </div>
 
                     <form onSubmit={agregarGastoPuntual} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -499,7 +563,7 @@
                       <div className="flex gap-2">
                         <select required value={nuevoGastoPuntual.walletId} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-rose-500">
                           <option value="">¿De qué billetera pagaste?</option>
-                          {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} ({a.monto})</option>)}
+                          {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto})</option>)}
                         </select>
                         <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-4 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                       </div>
@@ -525,7 +589,9 @@
               </div>
             )}
 
-            {/* VISTA 2: DEUDAS Y PASIVOS */}
+            {/* ----------------------------------------------------- */}
+            {/* VISTA 2: DEUDAS Y PASIVOS                             */}
+            {/* ----------------------------------------------------- */}
             {vista === 'deudas' && (
               <div className="max-w-3xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -538,7 +604,7 @@
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Cargar Nueva Deuda</h3>
-                    <p className="text-xs text-slate-400 mt-1">Plata que pediste prestada o debés entregar.</p>
+                    <p className="text-xs text-slate-400 mt-1">Si ya existe una persona con ese nombre, el sistema le suma el saldo automáticamente.</p>
                   </div>
                   
                   <form onSubmit={agregarDeuda} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -546,7 +612,7 @@
                     <div className="flex gap-2">
                       <input type="number" step="any" required placeholder="Monto de la Deuda" value={nuevaDeuda.monto} onChange={e => setNuevaDeuda({...nuevaDeuda, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-rose-500 text-lg" />
                       <select value={nuevaDeuda.moneda} onChange={e => setNuevaDeuda({...nuevaDeuda, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-rose-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
-                      <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-6 py-3 rounded-xl transition">Cargar Deuda</button>
+                      <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-6 py-3 rounded-xl transition">Cargar</button>
                     </div>
                   </form>
 
@@ -563,7 +629,6 @@
                           </div>
                         </div>
 
-                        {/* PANEL DE PAGO DE DEUDA */}
                         {pagoDeudaActivo.idDeuda === item.id ? (
                           <div className="bg-slate-900 p-4 rounded-xl border border-emerald-500/50 flex flex-col gap-3 fade-in">
                             <p className="text-xs text-emerald-400 font-bold">Abonar o liquidar deuda:</p>
@@ -580,12 +645,87 @@
                             </div>
                           </div>
                         ) : (
-                          <div className="flex justify-end gap-2 border-t border-slate-800/50 pt-3">
+                          <div className="flex justify-between items-center border-t border-slate-800/50 pt-3">
+                            <div className="flex gap-1">
+                              <button onClick={() => setEditandoDeuda({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-pen"></i></button>
+                              <button onClick={() => guardarEnNube({...db, deudas: db.deudas.filter(x => x.id !== item.id)})} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
+                            </div>
                             <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: item.monto })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-4 py-2 rounded-xl text-xs font-bold transition">
                               Abonar / Liquidar
                             </button>
                           </div>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ----------------------------------------------------- */}
+            {/* VISTA 3: STOCK / NEGOCIO                              */}
+            {/* ----------------------------------------------------- */}
+            {vista === 'stock' && (
+              <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
+                
+                <div className="bg-gradient-to-br from-amber-900/40 to-slate-900 border border-amber-500/30 rounded-3xl p-8 shadow-xl text-center">
+                  <p className="text-sm font-bold text-amber-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-boxes-stacked mr-2"></i>Capital Físico en Stock</p>
+                  <h2 className="text-5xl font-black text-white">{formatDinero(totalStockUSD)}</h2>
+                  <p className="text-slate-400 text-xs font-mono mt-3">Eq: ${(totalStockUSD * db.cotizacionDolar).toLocaleString('es-AR')} ARS</p>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
+                  <div className="border-b border-slate-800 pb-3">
+                    <h3 className="text-lg font-bold text-white">Ingresar Repuestos</h3>
+                    <p className="text-xs text-slate-400 mt-1">Si el repuesto ya existe en la lista, se suma la cantidad automáticamente.</p>
+                  </div>
+                  
+                  <form onSubmit={agregarStock} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
+                    <div className="flex gap-2">
+                      {!mostrarInputStockLibre ? (
+                        <select value={nuevoStock.concepto} onChange={e => {
+                            if (e.target.value === 'OTRO') { setMostrarInputStockLibre(true); setNuevoStock({...nuevoStock, concepto: ''}); }
+                            else setNuevoStock({...nuevoStock, concepto: e.target.value});
+                        }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none">
+                          <option value="">-- Seleccionar de memoria --</option>
+                          {opcionesStock.map(op => <option key={op} value={op}>{op}</option>)}
+                          <option value="OTRO" className="font-bold text-amber-400">➕ Escribir concepto nuevo...</option>
+                        </select>
+                      ) : (
+                        <div className="w-full flex gap-2 fade-in">
+                          <input type="text" required autoFocus placeholder="Ej: Batería iPhone 15 Pro..." value={nuevoStock.concepto} onChange={e => setNuevoStock({...nuevoStock, concepto: e.target.value})} className="flex-1 bg-slate-900 border border-amber-500 rounded-xl px-4 py-3 text-white focus:outline-none text-sm" />
+                          <button type="button" onClick={() => {setMostrarInputStockLibre(false); setNuevoStock({...nuevoStock, concepto: ''});}} className="bg-slate-800 text-white px-4 py-3 rounded-xl"><i className="fa-solid fa-xmark"></i></button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input type="number" min="1" required placeholder="Cant." value={nuevoStock.cantidad} onChange={e => setNuevoStock({...nuevoStock, cantidad: e.target.value})} className="w-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-mono focus:outline-none focus:border-amber-500 text-center" title="Cantidad" />
+                      <input type="number" step="any" required placeholder="Costo Unitario" value={nuevoStock.monto} onChange={e => setNuevoStock({...nuevoStock, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-500" />
+                      <select value={nuevoStock.moneda} onChange={e => setNuevoStock({...nuevoStock, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-amber-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                      <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-6 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
+                    </div>
+                  </form>
+
+                  <div className="space-y-3 pt-4">
+                    {(db.stock || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Sin repuestos en stock.</p> : db.stock.map(item => (
+                      <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
+                        
+                        <div className="flex-1 w-full flex justify-between items-center md:block">
+                          <p className="font-bold text-white text-base">{item.concepto}</p>
+                          <p className="text-[11px] text-slate-500 font-mono mt-1">Costo Unit: {item.monto} {item.moneda}</p>
+                        </div>
+                        
+                        <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shrink-0">
+                          <button onClick={() => modificarCantidadStock(item.id, -1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-minus text-xs"></i></button>
+                          <span className="px-4 py-2 font-mono font-black text-amber-400 border-x border-slate-700 bg-slate-950 text-base min-w-[50px] text-center">{item.cantidad}</span>
+                          <button onClick={() => modificarCantidadStock(item.id, 1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-plus text-xs"></i></button>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button onClick={() => setEditandoStock({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-9 h-9 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
+                          <button onClick={() => guardarEnNube({...db, stock: db.stock.filter(x => x.id !== item.id)})} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-9 h-9 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -657,6 +797,66 @@
                 <div className="flex gap-3 pt-2">
                   <button type="submit" className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 rounded-xl transition">Guardar Cambios</button>
                   <button type="button" onClick={() => setEditandoFijo(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {editandoDeuda && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const actualizadas = db.deudas.map(d => d.id === editandoDeuda.id ? { ...d, acreedor: editandoDeuda.acreedor, monto: parseFloat(editandoDeuda.monto) || 0, moneda: editandoDeuda.moneda } : d);
+                guardarEnNube({ ...db, deudas: actualizadas });
+                setEditandoDeuda(null);
+              }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
+                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Deuda</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Acreedor / Concepto</label>
+                    <input type="text" required value={editandoDeuda.acreedor} onChange={e => setEditandoDeuda({...editandoDeuda, acreedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoDeuda.monto} onChange={e => setEditandoDeuda({...editandoDeuda, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
+                      <select value={editandoDeuda.moneda} onChange={e => setEditandoDeuda({...editandoDeuda, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition">Guardar Cambios</button>
+                  <button type="button" onClick={() => setEditandoDeuda(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {editandoStock && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const actualizado = db.stock.map(s => s.id === editandoStock.id ? { ...s, concepto: editandoStock.concepto, monto: parseFloat(editandoStock.monto) || 0, moneda: editandoStock.moneda } : s);
+                guardarEnNube({ ...db, stock: actualizado });
+                setEditandoStock(null);
+              }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
+                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Repuesto</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Concepto</label>
+                    <input type="text" required value={editandoStock.concepto} onChange={e => setEditandoStock({...editandoStock, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoStock.monto} onChange={e => setEditandoStock({...editandoStock, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
+                      <select value={editandoStock.moneda} onChange={e => setEditandoStock({...editandoStock, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 rounded-xl transition">Guardar Cambios</button>
+                  <button type="button" onClick={() => setEditandoStock(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
                 </div>
               </form>
             </div>
