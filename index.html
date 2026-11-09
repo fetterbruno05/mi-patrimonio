@@ -60,7 +60,6 @@
         stock: [], historiaConceptos: [], historiaStock: [], actividad: [] 
     };
 
-    // Colores para el gráfico de barras de gastos
     const COLORES_GRAFICO = ['bg-rose-500', 'bg-blue-500', 'bg-amber-500', 'bg-emerald-500', 'bg-purple-500', 'bg-cyan-500', 'bg-pink-500', 'bg-indigo-500'];
 
     function App() {
@@ -70,20 +69,22 @@
       const [errorLogin, setErrorLogin] = useState('');
 
       const [db, setDb] = useState(DB_TEMPLATE);
-      const [vista, setVista] = useState('patrimonio'); // Vistas: patrimonio, gastos, deudas, cobrar, stock, actividad
+      const [vista, setVista] = useState('patrimonio'); 
 
-      // ESTADO DEL BLOQUEO DIARIO DE COTIZACIÓN
+      // ESTADOS DE LA APP (NUEVOS: PRIVACIDAD Y MONEDA GLOBAL)
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
+      const [monedaVisual, setMonedaVisual] = useState('USD'); // 'USD' o 'ARS'
+      const [modoPrivado, setModoPrivado] = useState(false); // true oculta números
 
-      // ESTADOS DE FORMULARIOS
+      // ESTADOS DE FORMULARIOS (Deudas ahora incluye "motivo")
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       
-      const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', monto: '', moneda: 'USD' });
-      const [nuevaDeudaCobrar, setNuevaDeudaCobrar] = useState({ deudor: '', monto: '', moneda: 'USD', walletId: '' }); 
+      const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
+      const [nuevaDeudaCobrar, setNuevaDeudaCobrar] = useState({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' }); 
 
       const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
@@ -105,7 +106,7 @@
       
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
-      // ESTADOS DE AUDITORÍA (FILTROS Y ASISTENTE)
+      // ESTADOS DE AUDITORÍA
       const [filtroUsuario, setFiltroUsuario] = useState('');
       const [filtroDesde, setFiltroDesde] = useState('');
       const [filtroHasta, setFiltroHasta] = useState('');
@@ -182,9 +183,27 @@
           setBloqueoCotizacion(false);
       };
 
-      // Funciones de visualización y cálculo base
-      const calcularUSD = (monto, moneda) => { return moneda === 'USD' ? (parseFloat(monto) || 0) : (parseFloat(monto) || 0) / db.cotizacionDolar; };
-      const formatDinero = (montoUSD) => { return `$ ${parseFloat(montoUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`; };
+      // ==========================================
+      // FUNCIONES DE CONVERSIÓN Y VISUALIZACIÓN
+      // ==========================================
+      
+      // Convierte de cualquier moneda base a la moneda visual que el usuario haya elegido en el momento
+      const convertirParaMostrar = (montoBase, monedaBase) => {
+          const val = parseFloat(montoBase) || 0;
+          if (monedaVisual === 'USD') {
+              return monedaBase === 'USD' ? val : val / db.cotizacionDolar;
+          } else {
+              return monedaBase === 'ARS' ? val : val * db.cotizacionDolar;
+          }
+      };
+
+      // Formatea aplicando el modo privacidad si está activo
+      const formatDinero = (monto) => {
+          if (modoPrivado) return `**** ${monedaVisual}`;
+          const val = parseFloat(monto || 0);
+          return `${monedaVisual === 'USD' ? 'U$D' : '$'} ${val.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${monedaVisual}`;
+      };
+
       const calcularDiasPasados = (fechaStr) => {
           const partes = fechaStr.split('/');
           const fechaObj = new Date(partes[2], partes[1] - 1, partes[0]);
@@ -361,7 +380,7 @@
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
-      // --- DEUDAS (HACIA OTROS) ---
+      // --- DEUDAS (HACIA OTROS) CON MOTIVO ---
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
@@ -371,14 +390,15 @@
         let log;
         if (idxExistente !== -1) {
           deudasActualizadas[idxExistente].monto = (parseFloat(deudasActualizadas[idxExistente].monto) + montoNuevo).toFixed(2);
-          log = generarLog('Aumentó Deuda Existente', `Le sumó ${montoNuevo} ${nuevaDeuda.moneda} a la deuda con "${deudasActualizadas[idxExistente].acreedor}".`, deudasActualizadas[idxExistente]);
+          deudasActualizadas[idxExistente].motivo = nuevaDeuda.motivo.trim(); // Actualiza el motivo
+          log = generarLog('Aumentó Deuda Existente', `Le sumó ${montoNuevo} ${nuevaDeuda.moneda} a la deuda con "${deudasActualizadas[idxExistente].acreedor}". Motivo: ${nuevaDeuda.motivo}`, deudasActualizadas[idxExistente]);
         } else {
-          const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
+          const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), motivo: nuevaDeuda.motivo.trim(), monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
           deudasActualizadas.unshift(item);
-          log = generarLog('Creó Nueva Deuda', `Registró nueva deuda con "${item.acreedor}" por ${item.monto} ${item.moneda}.`, item);
+          log = generarLog('Creó Nueva Deuda', `Registró deuda con "${item.acreedor}" por ${item.monto} ${item.moneda}. Motivo: ${item.motivo}`, item);
         }
         guardarEnNube({ ...db, deudas: deudasActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setNuevaDeuda({ acreedor: '', monto: '', moneda: 'USD' });
+        setNuevaDeuda({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
       };
 
       const procesarPagoDeuda = (itemDeuda) => {
@@ -401,7 +421,7 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
       };
 
-      // --- DEUDAS HACIA MÍ (COBRAR) ---
+      // --- NUEVO: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -416,15 +436,16 @@
         let log;
         if (idxExistente !== -1) {
           deudasCobrarActualizadas[idxExistente].monto = (parseFloat(deudasCobrarActualizadas[idxExistente].monto) + montoPrestado).toFixed(2);
-          log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} extra a "${deudasCobrarActualizadas[idxExistente].deudor}". Descontado de tu billetera.`, deudasCobrarActualizadas[idxExistente]);
+          deudasCobrarActualizadas[idxExistente].motivo = nuevaDeudaCobrar.motivo.trim(); // Actualiza motivo
+          log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} extra a "${deudasCobrarActualizadas[idxExistente].deudor}". Motivo: ${nuevaDeudaCobrar.motivo}`, deudasCobrarActualizadas[idxExistente]);
         } else {
-          const item = { id: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), monto: montoPrestado.toFixed(2), moneda: nuevaDeudaCobrar.moneda, fecha: new Date().toLocaleDateString() };
+          const item = { id: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), motivo: nuevaDeudaCobrar.motivo.trim(), monto: montoPrestado.toFixed(2), moneda: nuevaDeudaCobrar.moneda, fecha: new Date().toLocaleDateString() };
           deudasCobrarActualizadas.unshift(item);
-          log = generarLog('Creó Cuenta a Cobrar', `Prestó ${item.monto} ${item.moneda} a "${item.deudor}". Descontado de tu billetera.`, item);
+          log = generarLog('Creó Cuenta a Cobrar', `Prestó ${item.monto} ${item.moneda} a "${item.deudor}". Motivo: ${item.motivo}`, item);
         }
 
         guardarEnNube({ ...db, activos: operacion.activosActualizados, deudasCobrar: deudasCobrarActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setNuevaDeudaCobrar({ deudor: '', monto: '', moneda: 'USD', walletId: '' });
+        setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
       };
 
       const procesarCobroDeuda = (itemDeuda) => {
@@ -488,33 +509,33 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
-      // --- CÁLCULOS TOTALES ---
-      const totalBilleterasUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
-      const totalActivosFisicosUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
+      // --- CÁLCULOS TOTALES (Se calculan primero en USD interno, y luego se pasan a formatDinero que decide si los muestra en USD o ARS visualmente) ---
+      const totalBilleterasUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
+      const totalActivosFisicosUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       
-      const totalBilleterasYActivosUSD = totalBilleterasUSD + totalActivosFisicosUSD;
-      const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + (calcularUSD(item.monto, item.moneda) * parseInt(item.cantidad)), 0);
-      const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
-      const totalDeudasCobrarUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
+      const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
+      const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
+      const totalDeudasCobrarUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       
-      const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
-      const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
+      const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
+      const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       
-      const patrimonioNetoRealUSD = totalBilleterasYActivosUSD + totalStockUSD - totalDeudasPendientesUSD;
+      // Patrimonio: Cuentas por cobrar son activos separados en su propia pestaña
+      const patrimonioNetoRealUSD = totalBilleterasUSD + totalActivosFisicosUSD + totalStockUSD - totalDeudasPendientesUSD;
 
-      // --- ANÁLISIS DE GASTOS (Gráfico de Barras) ---
+      // --- ANÁLISIS DE GASTOS (Gráfico de Barras) - Se calcula en la moneda seleccionada visualmente ---
       const gastosPorCategoria = useMemo(() => {
         const sumas = {};
         (db.gastosPuntuales || []).forEach(g => {
-            const usdVal = calcularUSD(g.monto, g.moneda);
+            const val = convertirParaMostrar(g.monto, g.moneda);
             const cat = g.concepto || 'Otros';
-            sumas[cat] = (sumas[cat] || 0) + usdVal;
+            sumas[cat] = (sumas[cat] || 0) + val;
         });
         const totalSueltos = Object.values(sumas).reduce((a,b) => a+b, 0);
         return Object.entries(sumas)
-            .map(([cat, val]) => ({ categoria: cat, montoUSD: val, porcentaje: totalSueltos ? (val/totalSueltos)*100 : 0 }))
-            .sort((a,b) => b.montoUSD - a.montoUSD);
-      }, [db.gastosPuntuales, db.cotizacionDolar]);
+            .map(([cat, val]) => ({ categoria: cat, montoGrafico: val, porcentaje: totalSueltos ? (val/totalSueltos)*100 : 0 }))
+            .sort((a,b) => b.montoGrafico - a.montoGrafico);
+      }, [db.gastosPuntuales, db.cotizacionDolar, monedaVisual]);
 
       // FILTRADO DE AUDITORÍA
       const logsFiltrados = (db.actividad || []).filter(log => {
@@ -583,9 +604,8 @@
             
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setVista('patrimonio')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'patrimonio' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <i className="fa-solid fa-wallet w-5 text-center"></i> Patrimonio
+                <i className="fa-solid fa-scale-balanced w-5 text-center"></i> Patrimonio Real
               </button>
-              {/* NUEVA PESTAÑA DE GASTOS */}
               <button onClick={() => setVista('gastos')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${vista === 'gastos' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <i className="fa-solid fa-chart-pie w-5 text-center"></i> Gastos y Análisis
               </button>
@@ -601,7 +621,7 @@
                 <i className="fa-solid fa-boxes-stacked w-5 text-center"></i> Stock Repuestos
               </button>
               <button onClick={() => setVista('actividad')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all mt-4 border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <i className="fa-solid fa-shield-halved w-5 text-center"></i> Auditoría (Logs)
+                <i className="fa-solid fa-shield-halved w-5 text-center text-indigo-400"></i> Auditoría (Logs)
               </button>
             </nav>
 
@@ -631,35 +651,61 @@
           {/* CONTENIDO PRINCIPAL */}
           <main className="flex-1 overflow-y-auto p-4 md:p-8 relative fade-in hide-scrollbar">
             
+            {/* SWITCH GLOBAL DE MONEDA Y PRIVACIDAD */}
+            <div className="fixed top-4 right-4 md:top-8 md:right-8 z-50 flex gap-2">
+              <button onClick={() => setModoPrivado(!modoPrivado)} className={`flex items-center justify-center w-10 h-10 rounded-full shadow-lg transition-all ${modoPrivado ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'}`} title={modoPrivado ? "Desactivar Privacidad" : "Modo Ocultar Números"}>
+                  <i className={`fa-solid ${modoPrivado ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+              </button>
+              <div className="bg-slate-800 border border-slate-700 rounded-full p-1 flex shadow-lg">
+                <button onClick={() => setMonedaVisual('ARS')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${monedaVisual === 'ARS' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>ARS</button>
+                <button onClick={() => setMonedaVisual('USD')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${monedaVisual === 'USD' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>USD</button>
+              </div>
+            </div>
+
             {/* ===================================================== */}
             {/* VISTA 1: PATRIMONIO EXCLUSIVO                         */}
             {/* ===================================================== */}
             {vista === 'patrimonio' && (
-              <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
+              <div className="max-w-6xl mx-auto space-y-8 pb-20 fade-in">
                 
-                {/* DASHBOARD EXCLUSIVO PATRIMONIO */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl relative overflow-hidden">
-                    <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 relative z-10"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
-                    <h2 className={`text-4xl font-black relative z-10 ${patrimonioNetoRealUSD >= 0 ? 'text-white' : 'text-rose-400'}`}>
-                      {patrimonioNetoRealUSD < 0 ? '-' : ''}{formatDinero(Math.abs(patrimonioNetoRealUSD))}
+                {/* DASHBOARD COMPLETO (5 Tarjetas) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  
+                  <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl lg:col-span-3 xl:col-span-1">
+                    <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
+                    <h2 className={`text-4xl font-black ${patrimonioNetoRealUSD >= 0 ? 'text-white' : 'text-rose-400'}`}>
+                      {patrimonioNetoRealUSD < 0 ? '-' : ''}{formatDinero(Math.abs(convertirParaMostrar(patrimonioNetoRealUSD, 'USD')))}
                     </h2>
-                    <p className="text-slate-400 text-[9px] uppercase font-bold mt-2 relative z-10 leading-tight">Activos + Stock - Deudas a otros</p>
+                    <p className="text-slate-400 text-[10px] uppercase font-bold mt-2">Suma de todo - Deudas a otros</p>
                   </div>
+                  
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-money-bill-wave mr-2"></i>Dinero Líquido</p>
-                    <h2 className="text-3xl font-black text-emerald-400">{formatDinero(totalBilleterasUSD)}</h2>
-                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2 leading-tight">Plata en Billeteras (Disponible)</p>
+                    <p className="text-xs font-bold text-emerald-500 uppercase tracking-widest mb-3"><i className="fa-solid fa-money-bill-wave mr-2"></i>Dinero Líquido</p>
+                    <h2 className="text-3xl font-black text-emerald-400">{formatDinero(convertirParaMostrar(totalBilleterasUSD, 'USD'))}</h2>
+                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Billeteras / Bancos / Efectivo</p>
                   </div>
+                  
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
+                    <p className="text-xs font-bold text-amber-500 uppercase tracking-widest mb-3"><i className="fa-solid fa-boxes-stacked mr-2"></i>Capital en Stock</p>
+                    <h2 className="text-3xl font-black text-amber-400">{formatDinero(convertirParaMostrar(totalStockUSD, 'USD'))}</h2>
+                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Mercadería invertida</p>
+                  </div>
+
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                     <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-cube mr-2"></i>Activos Físicos</p>
-                    <h2 className="text-3xl font-black text-amber-400">{formatDinero(totalActivosFisicosUSD)}</h2>
-                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2 leading-tight">Objetos de Valor (No incluye Stock)</p>
+                    <h2 className="text-3xl font-black text-slate-300">{formatDinero(convertirParaMostrar(totalActivosFisicosUSD, 'USD'))}</h2>
+                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Vehículos, Electrónica (No stock)</p>
                   </div>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
+                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-hand-holding-dollar mr-2"></i>Plata en la calle</p>
+                    <h2 className="text-3xl font-black text-indigo-400">{formatDinero(convertirParaMostrar(totalDeudasCobrarUSD, 'USD'))}</h2>
+                    <p className="text-slate-500 text-[10px] uppercase font-bold mt-2">Cuentas por Cobrar a otros</p>
+                  </div>
+
                 </div>
 
-                {/* FORMULARIO BILLETERAS/ACTIVOS CENTRADO */}
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl max-w-4xl mx-auto">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-wallet text-blue-400 mr-2"></i>Gestión de Cuentas y Activos</h3>
                     <p className="text-xs text-slate-400 mt-1">Registrá tus cuentas de banco, efectivo y bienes personales.</p>
@@ -685,10 +731,10 @@
                             {item.nombre} 
                             {(!item.tipo || item.tipo === 'billetera') ? <i className="fa-solid fa-money-bill-1-wave text-xs text-emerald-400 bg-emerald-950 px-2 py-1 rounded" title="Billetera"></i> : <i className="fa-solid fa-cube text-xs text-amber-400 bg-amber-950 px-2 py-1 rounded" title="Físico"></i>}
                           </p>
-                          <p className="text-xs text-slate-500 font-mono mt-1">Ingreso Original: {item.monto} {item.moneda}</p>
+                          {!modoPrivado && <p className="text-xs text-slate-500 font-mono mt-1">Cargado en moneda base: {item.monto} {item.moneda}</p>}
                         </div>
                         <div className="w-full md:w-auto flex items-center justify-between gap-4">
-                          <span className="font-mono font-black text-blue-400 text-xl">{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
+                          <span className="font-mono font-black text-blue-400 text-xl">{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                           <div className="flex gap-2">
                             <button onClick={() => setEditandoActivo({...item, tipo: item.tipo || 'billetera'})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-10 h-10 rounded-xl transition-colors"><i className="fa-solid fa-pen"></i></button>
                             <button onClick={() => {
@@ -705,30 +751,28 @@
             )}
 
             {/* ===================================================== */}
-            {/* VISTA NUEVA: GASTOS Y ANÁLISIS                        */}
+            {/* VISTA 2: GASTOS Y ANÁLISIS                            */}
             {/* ===================================================== */}
             {vista === 'gastos' && (
               <div className="max-w-6xl mx-auto space-y-8 pb-20 fade-in">
                 
-                {/* DASHBOARD DE GASTOS */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex justify-between items-center">
                     <div>
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1"><i className="fa-solid fa-calendar-days mr-2"></i>Carga Fija Mensual</p>
-                        <h2 className="text-4xl font-black text-amber-400">{formatDinero(totalGastosFijosUSD)}</h2>
+                        <h2 className="text-4xl font-black text-amber-400">{formatDinero(convertirParaMostrar(totalGastosFijosUSD, 'USD'))}</h2>
                     </div>
                     <i className="fa-solid fa-receipt text-4xl text-amber-500/20"></i>
                   </div>
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex justify-between items-center">
                     <div>
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1"><i className="fa-solid fa-cart-shopping mr-2"></i>Sueltos (Histórico)</p>
-                        <h2 className="text-4xl font-black text-indigo-400">{formatDinero(totalGastosPuntualesUSD)}</h2>
+                        <h2 className="text-4xl font-black text-indigo-400">{formatDinero(convertirParaMostrar(totalGastosPuntualesUSD, 'USD'))}</h2>
                     </div>
                     <i className="fa-solid fa-basket-shopping text-4xl text-indigo-500/20"></i>
                   </div>
                 </div>
 
-                {/* BARRAS DE ANÁLISIS DE CONSUMO */}
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
                   <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-6"><i className="fa-solid fa-chart-pie mr-2 text-indigo-400"></i>Distribución de Gastos Sueltos</h3>
                   <div className="space-y-5">
@@ -740,12 +784,12 @@
                                 <div className="flex justify-between items-end mb-2">
                                     <span className="font-bold text-white text-sm">{cat.categoria}</span>
                                     <div className="text-right">
-                                        <span className="font-mono text-xs text-slate-300 mr-2">{formatDinero(cat.montoUSD)}</span>
-                                        <span className="font-black text-white bg-slate-800 px-2 py-1 rounded text-[10px]">{cat.porcentaje.toFixed(1)}%</span>
+                                        <span className="font-mono text-xs text-slate-300 mr-2">{formatDinero(cat.montoGrafico)}</span>
+                                        {!modoPrivado && <span className="font-black text-white bg-slate-800 px-2 py-1 rounded text-[10px]">{cat.porcentaje.toFixed(1)}%</span>}
                                     </div>
                                 </div>
                                 <div className="w-full bg-slate-950 rounded-full h-3 border border-slate-800 overflow-hidden">
-                                    <div className={`h-full rounded-full ${COLORES_GRAFICO[i % COLORES_GRAFICO.length]} transition-all duration-1000 ease-out`} style={{width: `${cat.porcentaje}%`}}></div>
+                                    <div className={`h-full rounded-full ${COLORES_GRAFICO[i % COLORES_GRAFICO.length]} transition-all duration-1000 ease-out`} style={{width: modoPrivado ? '0%' : `${cat.porcentaje}%`}}></div>
                                 </div>
                             </div>
                         ))
@@ -788,10 +832,11 @@
                                 {item.concepto} 
                                 {item.tipo === 'cuotas' ? <span className="bg-amber-950 text-amber-400 px-2 py-0.5 rounded border border-amber-800 text-[10px] ml-2">Cuota {item.cuotasPagadas}/{item.cuotasTotales}</span> : <span className="bg-slate-800 text-slate-400 px-2 py-0.5 rounded text-[9px] ml-2 uppercase">Vence día {item.diaVencimiento}</span>}
                               </p>
-                              <p className="text-[12px] text-amber-400 font-bold font-mono mt-1">{item.monto} <span className="text-[9px]">{item.moneda}</span></p>
+                              {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Base: {item.monto} {item.moneda}</p>}
                               {item.ultimoPago && <p className="text-[10px] text-emerald-500 mt-1"><i className="fa-solid fa-check mr-1"></i>Últ. pago: {item.ultimoPago}</p>}
                             </div>
                             <div className="flex flex-col items-end gap-1">
+                              <span className="font-mono font-black text-amber-400 text-lg">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                               <div className="flex gap-1 mt-1">
                                 <button onClick={() => setEditandoFijo({...item})} className="bg-slate-800 text-slate-400 hover:text-white px-2 py-1.5 rounded text-xs transition"><i className="fa-solid fa-pen"></i></button>
                                 <button onClick={() => {
@@ -874,10 +919,11 @@
                         <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex justify-between items-center hover:border-slate-700 transition">
                           <div>
                             <p className="font-bold text-white text-base">{item.concepto}</p>
-                            <p className="text-[12px] text-indigo-400 font-bold font-mono mt-1">{item.monto} <span className="text-[9px]">{item.moneda}</span></p>
+                            {!modoPrivado && <p className="text-[11px] text-slate-500 mt-1">Original: {item.monto} {item.moneda}</p>}
                             <p className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">{item.fecha} • De: {item.pagadoCon}</p>
                           </div>
                           <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-indigo-400 text-lg mr-2">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                             <button onClick={() => setEditandoGastoPuntual({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
                             <button onClick={() => eliminarGastoPuntual(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
                           </div>
@@ -890,29 +936,32 @@
             )}
 
             {/* ===================================================== */}
-            {/* VISTA 3: DEUDAS Y PASIVOS                             */}
+            {/* VISTA 3: DEUDAS A OTROS (Con Motivo)                  */}
             {/* ===================================================== */}
             {vista === 'deudas' && (
-              <div className="max-w-3xl mx-auto space-y-8 pb-20 fade-in">
+              <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
                 <div className="bg-gradient-to-br from-rose-900/40 to-slate-900 border border-rose-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-rose-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-handshake mr-2"></i>Total Deudas a Otros</p>
-                  <h2 className="text-5xl font-black text-white">{formatDinero(totalDeudasPendientesUSD)}</h2>
+                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalDeudasPendientesUSD, 'USD'))}</h2>
                   <p className="text-slate-400 text-xs font-mono mt-3">Resta directo de tu Patrimonio Neto Real.</p>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
-                    <h3 className="text-lg font-bold text-white">Cargar Nueva Deuda</h3>
-                    <p className="text-xs text-slate-400 mt-1">Si ya existe una persona con ese nombre, se le suma el saldo automáticamente.</p>
+                    <h3 className="text-lg font-bold text-white">Cargar Nueva Deuda / Pedir Prestado</h3>
+                    <p className="text-xs text-slate-400 mt-1">Anotá a quién le debés y explicá para qué pediste la plata.</p>
                   </div>
                   
                   <form onSubmit={agregarDeuda} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
-                    <input type="text" required placeholder="Acreedor / Concepto (Ej: Le debo a Juan)" value={nuevaDeuda.acreedor} onChange={e => setNuevaDeuda({...nuevaDeuda, acreedor: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500" />
+                    <div className="flex gap-2">
+                        <input type="text" required placeholder="Acreedor (Ej: Banco / Juan)" value={nuevaDeuda.acreedor} onChange={e => setNuevaDeuda({...nuevaDeuda, acreedor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500" />
+                        <input type="text" required placeholder="Motivo (Obligatorio. Ej: Comprar repuestos)" value={nuevaDeuda.motivo} onChange={e => setNuevaDeuda({...nuevaDeuda, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500 text-sm" />
+                    </div>
                     <div className="flex gap-2">
                       <input type="number" step="any" required placeholder="Monto de la Deuda" value={nuevaDeuda.monto} onChange={e => setNuevaDeuda({...nuevaDeuda, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-rose-500 text-lg" />
                       <select value={nuevaDeuda.moneda} onChange={e => setNuevaDeuda({...nuevaDeuda, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-rose-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
-                      <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-6 py-3 rounded-xl transition">Cargar</button>
+                      <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-6 py-3 rounded-xl transition">Cargar Deuda</button>
                     </div>
                   </form>
 
@@ -922,7 +971,11 @@
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="font-black text-white text-lg">{item.acreedor}</p>
-                            <p className="text-sm text-rose-500 font-bold font-mono mt-1">{item.monto} <span className="text-xs">{item.moneda}</span></p>
+                            <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
+                            {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Base: {item.monto} {item.moneda}</p>}
+                          </div>
+                          <div className="text-right">
+                            <span className="font-mono font-black text-rose-500 text-2xl">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                           </div>
                         </div>
 
@@ -963,26 +1016,28 @@
             )}
 
             {/* ===================================================== */}
-            {/* VISTA 4: DEUDAS HACIA MÍ (COBRAR)                     */}
+            {/* VISTA 4: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO          */}
             {/* ===================================================== */}
             {vista === 'cobrar' && (
-              <div className="max-w-3xl mx-auto space-y-8 pb-20 fade-in">
+              <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
                 <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-hand-holding-dollar mr-2"></i>Total a Cobrar (Préstamos)</p>
-                  <h2 className="text-5xl font-black text-white">{formatDinero(totalDeudasCobrarUSD)}</h2>
+                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalDeudasCobrarUSD, 'USD'))}</h2>
                   <p className="text-slate-400 text-xs font-mono mt-3">Es tu plata, pero hoy no la tenés líquida.</p>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white">Prestar Plata / Anotar a Cobrar</h3>
-                    <p className="text-xs text-slate-400 mt-1">Saldrá de tu billetera y quedará en esta pestaña hasta que te paguen.</p>
+                    <p className="text-xs text-slate-400 mt-1">Explicá por qué prestaste la plata. Se descontará de tu billetera y quedará acá hasta que te paguen.</p>
                   </div>
                   
                   <form onSubmit={agregarDeudaCobrar} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
-                    <input type="text" required placeholder="Deudor (Ej: Le presté a Juan / Trabajo pendiente)" value={nuevaDeudaCobrar.deudor} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, deudor: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500" />
-                    
+                    <div className="flex gap-2">
+                        <input type="text" required placeholder="Deudor (Ej: Cliente X)" value={nuevaDeudaCobrar.deudor} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, deudor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500" />
+                        <input type="text" required placeholder="Motivo (Obligatorio. Ej: Adelanto sueldo / Préstamo personal)" value={nuevaDeudaCobrar.motivo} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 text-sm" />
+                    </div>
                     <div className="flex gap-2">
                       <input type="number" step="any" required placeholder="Monto" value={nuevaDeudaCobrar.monto} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-emerald-500 text-lg" />
                       <select value={nuevaDeudaCobrar.moneda} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-emerald-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
@@ -993,7 +1048,7 @@
                         <option value="">¿De qué billetera le prestaste la plata?</option>
                         {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
                       </select>
-                      <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition">Anotar</button>
+                      <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition">Prestar Plata</button>
                     </div>
                   </form>
 
@@ -1008,10 +1063,12 @@
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="font-black text-white text-lg">{item.deudor}</p>
-                            <p className="text-sm text-emerald-400 font-bold font-mono mt-1">{item.monto} <span className="text-xs">{item.moneda}</span></p>
+                            <p className="text-xs text-slate-400 mt-1 italic">"{item.motivo}"</p>
+                            {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Base: {item.monto} {item.moneda}</p>}
                           </div>
                           <div className="text-right">
-                            <span className={`font-mono font-bold text-xs border border-slate-700 rounded px-2 py-1 ${colorDias}`}>Hace {diasPasados} días</span>
+                            <span className="font-mono font-black text-emerald-400 text-2xl">+{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
+                            <div className="mt-2"><span className={`font-mono font-bold text-xs border border-slate-700 rounded px-2 py-1 ${colorDias}`}>Hace {diasPasados} días</span></div>
                           </div>
                         </div>
 
@@ -1056,7 +1113,7 @@
                 
                 <div className="bg-gradient-to-br from-amber-900/40 to-slate-900 border border-amber-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-amber-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-boxes-stacked mr-2"></i>Capital Físico en Stock</p>
-                  <h2 className="text-5xl font-black text-white">{formatDinero(totalStockUSD)}</h2>
+                  <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(totalStockUSD, 'USD'))}</h2>
                   <p className="text-slate-400 text-xs font-mono mt-3">Suma directo a tu Patrimonio Neto Real.</p>
                 </div>
 
@@ -1102,13 +1159,16 @@
                         
                         <div className="flex-1 w-full flex justify-between items-center md:block">
                           <p className="font-bold text-white text-base">{item.concepto}</p>
-                          <p className="text-[12px] text-amber-400 font-bold font-mono mt-1">{item.monto} <span className="text-[9px]">{item.moneda}</span></p>
+                          {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-1">Costo Original: {item.monto} {item.moneda}</p>}
                         </div>
-                        
-                        <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shrink-0">
-                          <button onClick={() => modificarCantidadStock(item.id, -1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-minus text-xs"></i></button>
-                          <span className="px-4 py-2 font-mono font-black text-amber-400 border-x border-slate-700 bg-slate-950 text-base min-w-[50px] text-center">{item.cantidad}</span>
-                          <button onClick={() => modificarCantidadStock(item.id, 1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-plus text-xs"></i></button>
+
+                        <div className="flex items-center gap-4">
+                           <span className="font-mono font-bold text-slate-400 text-sm">Eq: {formatDinero(convertirParaMostrar(item.monto, item.moneda))} c/u</span>
+                          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shrink-0">
+                            <button onClick={() => modificarCantidadStock(item.id, -1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-minus text-xs"></i></button>
+                            <span className="px-4 py-2 font-mono font-black text-amber-400 border-x border-slate-700 bg-slate-950 text-base min-w-[50px] text-center">{item.cantidad}</span>
+                            <button onClick={() => modificarCantidadStock(item.id, 1)} className="px-4 py-2 hover:bg-slate-800 text-slate-300 font-bold transition"><i className="fa-solid fa-plus text-xs"></i></button>
+                          </div>
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
@@ -1261,7 +1321,7 @@
                     <input type="text" required value={editandoActivo.nombre} onChange={e => setEditandoActivo({...editandoActivo, nombre: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Saldo Exacto o Valor</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Saldo Base Original</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoActivo.monto} onChange={e => setEditandoActivo({...editandoActivo, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoActivo.moneda} onChange={e => setEditandoActivo({...editandoActivo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
@@ -1281,7 +1341,7 @@
               <form onSubmit={(e) => {
                 e.preventDefault();
                 const actualizados = db.gastosFijos.map(g => g.id === editandoFijo.id ? { ...g, concepto: editandoFijo.concepto, monto: parseFloat(editandoFijo.monto) || 0, moneda: editandoFijo.moneda } : g);
-                const log = generarLog('Editó Gasto Fijo', `Editó "${editandoFijo.concepto}". Monto: ${editandoFijo.monto} ${editandoFijo.moneda}`, editandoFijo);
+                const log = generarLog('Editó Gasto Fijo', `Editó "${editandoFijo.concepto}". Monto base: ${editandoFijo.monto} ${editandoFijo.moneda}`, editandoFijo);
                 guardarEnNube({ ...db, gastosFijos: actualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoFijo(null);
               }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
@@ -1292,7 +1352,7 @@
                     <input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Precio de la Cuota</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Precio Original de la Cuota</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoFijo.monto} onChange={e => setEditandoFijo({...editandoFijo, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoFijo.moneda} onChange={e => setEditandoFijo({...editandoFijo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1311,19 +1371,23 @@
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
                 e.preventDefault();
-                const actualizadas = db.deudas.map(d => d.id === editandoDeuda.id ? { ...d, acreedor: editandoDeuda.acreedor, monto: parseFloat(editandoDeuda.monto) || 0, moneda: editandoDeuda.moneda } : d);
-                const log = generarLog('Editó Deuda', `Editó deuda de "${editandoDeuda.acreedor}". Nuevo monto: ${editandoDeuda.monto} ${editandoDeuda.moneda}`, editandoDeuda);
+                const actualizadas = db.deudas.map(d => d.id === editandoDeuda.id ? { ...d, acreedor: editandoDeuda.acreedor, motivo: editandoDeuda.motivo, monto: parseFloat(editandoDeuda.monto) || 0, moneda: editandoDeuda.moneda } : d);
+                const log = generarLog('Editó Deuda', `Editó deuda de "${editandoDeuda.acreedor}". Nuevo monto base: ${editandoDeuda.monto} ${editandoDeuda.moneda}`, editandoDeuda);
                 guardarEnNube({ ...db, deudas: actualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoDeuda(null);
               }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
                 <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Deuda a Otros</h3>
                 <div className="space-y-3">
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Acreedor / Concepto</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Acreedor</label>
                     <input type="text" required value={editandoDeuda.acreedor} onChange={e => setEditandoDeuda({...editandoDeuda, acreedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Motivo</label>
+                    <input type="text" required value={editandoDeuda.motivo} onChange={e => setEditandoDeuda({...editandoDeuda, motivo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeuda.monto} onChange={e => setEditandoDeuda({...editandoDeuda, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoDeuda.moneda} onChange={e => setEditandoDeuda({...editandoDeuda, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1342,7 +1406,7 @@
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
                 e.preventDefault();
-                const actualizadas = db.deudasCobrar.map(d => d.id === editandoDeudaCobrar.id ? { ...d, deudor: editandoDeudaCobrar.deudor, monto: parseFloat(editandoDeudaCobrar.monto) || 0, moneda: editandoDeudaCobrar.moneda } : d);
+                const actualizadas = db.deudasCobrar.map(d => d.id === editandoDeudaCobrar.id ? { ...d, deudor: editandoDeudaCobrar.deudor, motivo: editandoDeudaCobrar.motivo, monto: parseFloat(editandoDeudaCobrar.monto) || 0, moneda: editandoDeudaCobrar.moneda } : d);
                 const log = generarLog('Editó Cuenta por Cobrar', `Editó deuda de "${editandoDeudaCobrar.deudor}". Nuevo monto a favor: ${editandoDeudaCobrar.monto} ${editandoDeudaCobrar.moneda}`, editandoDeudaCobrar);
                 guardarEnNube({ ...db, deudasCobrar: actualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoDeudaCobrar(null);
@@ -1350,11 +1414,15 @@
                 <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Deuda a mi Favor</h3>
                 <div className="space-y-3">
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Deudor / Concepto</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Deudor</label>
                     <input type="text" required value={editandoDeudaCobrar.deudor} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, deudor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto a Cobrar</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Motivo</label>
+                    <input type="text" required value={editandoDeudaCobrar.motivo} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, motivo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto a Cobrar (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeudaCobrar.monto} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoDeudaCobrar.moneda} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1385,7 +1453,7 @@
                     <input type="text" required value={editandoStock.concepto} onChange={e => setEditandoStock({...editandoStock, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoStock.monto} onChange={e => setEditandoStock({...editandoStock, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoStock.moneda} onChange={e => setEditandoStock({...editandoStock, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1410,7 +1478,7 @@
                     <input type="text" required value={editandoGastoPuntual.concepto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoGastoPuntual.monto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoGastoPuntual.moneda} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
