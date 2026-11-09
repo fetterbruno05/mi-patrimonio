@@ -70,7 +70,6 @@
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', monto: '', moneda: 'USD' });
-      
       const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
 
@@ -84,8 +83,9 @@
       const [editandoFijo, setEditandoFijo] = useState(null);
       const [editandoDeuda, setEditandoDeuda] = useState(null);
       const [editandoStock, setEditandoStock] = useState(null);
+      const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); // Nuevo estado para edición de gastos sueltos
 
-      // AUTOCOMPLETADO (MEMORIA LIMPIA DE BASURA)
+      // AUTOCOMPLETADO
       const opcionesConcepto = useMemo(() => {
         return [...new Set(db.historiaConceptos || [])];
       }, [db.historiaConceptos]);
@@ -161,10 +161,10 @@
       };
 
       // ==========================================
-      // LÓGICA DE NEGOCIO: DESCUENTO SEGURO
+      // LÓGICA CORE FINANCIERA: REEMBOLSOS Y DESCUENTOS
       // ==========================================
-      const procesarDescuentoSeguro = (walletId, montoGasto, monedaGasto) => {
-        const activosClon = [...db.activos];
+      const procesarDescuentoSeguro = (walletId, montoGasto, monedaGasto, activosActuales) => {
+        const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
         if (idx === -1) return { success: false, msg: 'Billetera no encontrada' };
         
@@ -175,17 +175,31 @@
         if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
         
         if (parseFloat(wallet.monto) < montoARestar) {
-            return { 
-                success: false, 
-                msg: `¡Operación rechazada! Saldo insuficiente en ${wallet.nombre}.\nTenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${montoARestar.toFixed(2)} ${wallet.moneda}.`
-            };
+            return { success: false, msg: `Saldo insuficiente en ${wallet.nombre}. Tenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${montoARestar.toFixed(2)} ${wallet.moneda}.` };
         }
         
         activosClon[idx].monto = (parseFloat(wallet.monto) - montoARestar).toFixed(2);
         return { success: true, activosActualizados: activosClon };
       };
 
-      // --- HANDLERS PATRIMONIO ---
+      // NUEVA FUNCIÓN: Reembolsar dinero a la billetera (para cuando se elimina o edita un gasto)
+      const procesarReembolsoWallet = (walletId, montoAReembolsar, monedaReembolso, activosActuales) => {
+        const activosClon = [...activosActuales];
+        const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
+        // Si la billetera original fue borrada por el usuario, el reembolso se pierde (no hay a donde devolver)
+        if (idx === -1) return activosClon; 
+        
+        const wallet = activosClon[idx];
+        let montoASumar = parseFloat(montoAReembolsar);
+        
+        if (monedaReembolso === 'ARS' && wallet.moneda === 'USD') montoASumar = montoASumar / db.cotizacionDolar;
+        if (monedaReembolso === 'USD' && wallet.moneda === 'ARS') montoASumar = montoASumar * db.cotizacionDolar;
+        
+        activosClon[idx].monto = (parseFloat(wallet.monto) + montoASumar).toFixed(2);
+        return activosClon;
+      };
+
+      // --- HANDLERS PATRIMONIO Y GASTOS SUELTOS ---
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre.trim(), monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
@@ -197,16 +211,18 @@
         e.preventDefault();
         if (!nuevoGastoPuntual.walletId) return alert('Por favor, seleccioná de qué billetera salió el dinero.');
         if (!nuevoGastoPuntual.concepto) return alert('Ingresá el concepto del gasto.');
-        if (billeterasDisponibles.length === 0) return alert('Primero tenés que crear una Billetera (Los activos físicos no sirven para pagar).');
+        if (billeterasDisponibles.length === 0) return alert('Primero tenés que crear una Billetera.');
 
-        const operacion = procesarDescuentoSeguro(nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda);
+        const operacion = procesarDescuentoSeguro(nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda, db.activos);
         if (!operacion.success) { return alert(operacion.msg); }
         
         const walletUsada = db.activos.find(w => w.id === parseInt(nuevoGastoPuntual.walletId));
         const conceptoTrim = nuevoGastoPuntual.concepto.trim();
-        const item = { id: Date.now(), concepto: conceptoTrim, monto: parseFloat(nuevoGastoPuntual.monto) || 0, moneda: nuevoGastoPuntual.moneda, fecha: new Date().toLocaleDateString(), pagadoCon: walletUsada?.nombre || 'Desconocido' };
+        const item = { 
+          id: Date.now(), concepto: conceptoTrim, monto: parseFloat(nuevoGastoPuntual.monto) || 0, moneda: nuevoGastoPuntual.moneda, 
+          fecha: new Date().toLocaleDateString(), pagadoCon: walletUsada?.nombre || 'Desconocido', walletIdOriginal: walletUsada?.id // Guardamos el ID para poder reembolsar
+        };
 
-        // Guardamos el concepto en la memoria histórica
         const nuevaHistoriaConceptos = [...new Set([conceptoTrim, ...(db.historiaConceptos || [])])];
 
         guardarEnNube({ ...db, activos: operacion.activosActualizados, gastosPuntuales: [item, ...(db.gastosPuntuales || [])], historiaConceptos: nuevaHistoriaConceptos });
@@ -214,6 +230,46 @@
         setMostrarInputConceptoLibre(false);
       };
 
+      const eliminarGastoPuntual = (itemGasto) => {
+        if(window.confirm(`¿Eliminar gasto de ${itemGasto.concepto}? El dinero será reembolsado a ${itemGasto.pagadoCon}.`)){
+            const activosReembolsados = procesarReembolsoWallet(itemGasto.walletIdOriginal, itemGasto.monto, itemGasto.moneda, db.activos);
+            guardarEnNube({ ...db, activos: activosReembolsados, gastosPuntuales: db.gastosPuntuales.filter(x => x.id !== itemGasto.id) });
+        }
+      };
+
+      const procesarEdicionGastoPuntual = (e) => {
+        e.preventDefault();
+        // 1. Buscamos el gasto original como estaba antes de editarlo
+        const gastoOriginal = db.gastosPuntuales.find(g => g.id === editandoGastoPuntual.id);
+        
+        // 2. Le reembolsamos la plata de ese gasto viejo a la billetera original
+        const activosReembolsados = procesarReembolsoWallet(gastoOriginal.walletIdOriginal, gastoOriginal.monto, gastoOriginal.moneda, db.activos);
+        
+        // 3. Intentamos descontar el monto NUEVO de la billetera NUEVA (o la misma)
+        const operacionNuevoDescuento = procesarDescuentoSeguro(editandoGastoPuntual.walletIdOriginal, editandoGastoPuntual.monto, editandoGastoPuntual.moneda, activosReembolsados);
+        
+        if (!operacionNuevoDescuento.success) { 
+            return alert(operacionNuevoDescuento.msg + " (El gasto original no se modificó)."); 
+        }
+
+        // 4. Si todo salió bien, actualizamos el gasto
+        const nombreWalletNueva = operacionNuevoDescuento.activosActualizados.find(w => w.id === parseInt(editandoGastoPuntual.walletIdOriginal))?.nombre;
+        
+        const gastosPuntualesActualizados = db.gastosPuntuales.map(g => {
+            if (g.id === editandoGastoPuntual.id) {
+                return { 
+                    ...g, concepto: editandoGastoPuntual.concepto, monto: parseFloat(editandoGastoPuntual.monto), 
+                    moneda: editandoGastoPuntual.moneda, walletIdOriginal: parseInt(editandoGastoPuntual.walletIdOriginal), pagadoCon: nombreWalletNueva
+                };
+            }
+            return g;
+        });
+
+        guardarEnNube({ ...db, activos: operacionNuevoDescuento.activosActualizados, gastosPuntuales: gastosPuntualesActualizados });
+        setEditandoGastoPuntual(null);
+      };
+
+      // --- HANDLERS FIJOS ---
       const agregarGastoFijo = (e) => {
         e.preventDefault();
         const item = { 
@@ -226,7 +282,7 @@
 
       const procesarPagoFijo = (itemFijo) => {
         if (!pagoActivo.walletId) return alert('Elegí una billetera para descontar el pago.');
-        const operacion = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda);
+        const operacion = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda, db.activos);
         if (!operacion.success) { return alert(operacion.msg); }
         
         const gastosFijosActualizados = db.gastosFijos.map(g => {
@@ -263,7 +319,7 @@
         if (!abono || abono <= 0) return alert('Ingresá un monto válido a abonar.');
         if (abono > parseFloat(itemDeuda.monto)) return alert('No podés abonar más dinero del que debés.');
 
-        const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abono, itemDeuda.moneda);
+        const operacion = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abono, itemDeuda.moneda, db.activos);
         if (!operacion.success) { return alert(operacion.msg); }
 
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - abono;
@@ -297,7 +353,6 @@
           stockActualizado.unshift(item);
         }
         
-        // Guardamos el concepto en la memoria histórica del stock
         const nuevaHistoriaStock = [...new Set([conceptoTrim, ...(db.historiaStock || [])])];
         
         guardarEnNube({ ...db, stock: stockActualizado, historiaStock: nuevaHistoriaStock });
@@ -316,7 +371,7 @@
         guardarEnNube({ ...db, stock: stockActualizado });
       };
 
-      // --- CÁLCULOS TOTALES (AHORA INCLUYE EL STOCK EN EL PATRIMONIO REAL) ---
+      // --- CÁLCULOS TOTALES ---
       const totalBilleterasYActivosUSD = (db.activos || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + (calcularUSD(item.monto, item.moneda) * parseInt(item.cantidad)), 0);
       const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
@@ -324,7 +379,6 @@
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + calcularUSD(item.monto, item.moneda), 0);
       
-      // PATRIMONIO NETO REAL = BILLETERAS + ACTIVOS FÍSICOS + STOCK - DEUDAS
       const patrimonioNetoRealUSD = totalBilleterasYActivosUSD + totalStockUSD - totalDeudasPendientesUSD;
 
       // ==========================================
@@ -544,9 +598,9 @@
                     <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
                       <div>
                         <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-cart-shopping text-rose-400 mr-2"></i>Gastos Sueltos</h3>
-                        <p className="text-xs text-slate-400 mt-1">Se descuentan al instante.</p>
+                        <p className="text-xs text-slate-400 mt-1">Se descuentan al instante de tu billetera.</p>
                       </div>
-                      {opcionesConcepto.length > 0 && <button onClick={limpiarHistoriaConceptos} title="Limpiar lista de conceptos guardados" className="text-slate-600 hover:text-rose-400 transition-colors"><i className="fa-solid fa-eraser"></i></button>}
+                      {opcionesConcepto.length > 0 && <button onClick={limpiarHistoriaConceptos} title="Limpiar lista de conceptos guardados" className="text-slate-600 hover:text-rose-400 transition-colors bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
                     </div>
 
                     <form onSubmit={agregarGastoPuntual} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -592,9 +646,11 @@
                             <p className="text-[11px] text-slate-500 mt-1">{item.fecha} • {item.monto} {item.moneda}</p>
                             <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Pagado con: {item.pagadoCon}</p>
                           </div>
-                          <div className="flex items-center gap-4">
-                            <span className="font-mono font-black text-rose-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
-                            <button onClick={() => guardarEnNube({...db, gastosPuntuales: db.gastosPuntuales.filter(x => x.id !== item.id)})} className="text-slate-600 hover:text-rose-400 transition-colors p-2"><i className="fa-solid fa-trash"></i></button>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-rose-400 text-lg mr-2">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
+                            {/* BOTON DE EDITAR Y ELIMINAR CON REEMBOLSO */}
+                            <button onClick={() => setEditandoGastoPuntual({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
+                            <button onClick={() => eliminarGastoPuntual(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
                           </div>
                         </div>
                       ))}
@@ -695,7 +751,7 @@
                       <h3 className="text-lg font-bold text-white">Ingresar Repuestos</h3>
                       <p className="text-xs text-slate-400 mt-1">Si el repuesto ya existe en la lista, se suma la cantidad automáticamente.</p>
                     </div>
-                    {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} title="Limpiar lista de memoria" className="text-slate-600 hover:text-amber-400 transition-colors"><i className="fa-solid fa-eraser"></i></button>}
+                    {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} title="Limpiar lista de memoria" className="text-slate-600 hover:text-amber-400 transition-colors bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
                   </div>
                   
                   <form onSubmit={agregarStock} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
@@ -705,9 +761,9 @@
                             if (e.target.value === 'OTRO') { setMostrarInputStockLibre(true); setNuevoStock({...nuevoStock, concepto: ''}); }
                             else setNuevoStock({...nuevoStock, concepto: e.target.value});
                         }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none">
-                          <option value="">-- Seleccionar de memoria --</option>
+                          <option value="">-- Buscar en memoria --</option>
                           {opcionesStock.map(op => <option key={op} value={op}>{op}</option>)}
-                          <option value="OTRO" className="font-bold text-amber-400">➕ Escribir uno nuevo...</option>
+                          <option value="OTRO" className="font-bold text-amber-400">➕ Escribir concepto nuevo...</option>
                         </select>
                       ) : (
                         <div className="w-full flex gap-2 fade-in">
@@ -875,6 +931,39 @@
                 <div className="flex gap-3 pt-2">
                   <button type="submit" className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 rounded-xl transition">Guardar Cambios</button>
                   <button type="button" onClick={() => setEditandoStock(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Modal Edición Gasto Puntual (Reembolso Automático) */}
+          {editandoGastoPuntual && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={procesarEdicionGastoPuntual} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
+                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Gasto</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Concepto</label>
+                    <input type="text" required value={editandoGastoPuntual.concepto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoGastoPuntual.monto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
+                      <select value={editandoGastoPuntual.moneda} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Billetera de donde salió</label>
+                    <select required value={editandoGastoPuntual.walletIdOriginal} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, walletIdOriginal: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold">
+                      <option value="">Seleccionar billetera...</option>
+                      {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre} (Disp: {a.monto})</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition">Actualizar</button>
+                  <button type="button" onClick={() => setEditandoGastoPuntual(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
                 </div>
               </form>
             </div>
