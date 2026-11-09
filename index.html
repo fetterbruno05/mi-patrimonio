@@ -21,7 +21,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, Component } = React;
+    const { useState, useEffect, useMemo, Component } = React;
 
     class ErrorBoundary extends Component {
       constructor(props) { super(props); this.state = { hasError: false, errorInfo: null }; }
@@ -63,21 +63,31 @@
 
       const [db, setDb] = useState(DB_TEMPLATE);
 
-      // ESTADOS DE FORMULARIOS
+      // ESTADOS DE FORMULARIOS Y MEMORIA DE CONCEPTOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD' });
-      // Gasto Suelto ahora exige Billetera (origen)
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
-      // Gasto Fijo ahora tiene día del mes
+      const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false); // Para mostrar el input "Otro"
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
 
       // ESTADOS UI
       const [editandoDolar, setEditandoDolar] = useState(false);
       const [dolarInput, setDolarInput] = useState('');
-      // Para controlar qué cuota estamos pagando y mostrar el selector de billetera inline
       const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
+      
+      // ESTADOS DE EDICIÓN MODALES
+      const [editandoActivo, setEditandoActivo] = useState(null); // Guardará el activo que se está editando
+      const [editandoFijo, setEditandoFijo] = useState(null); // Guardará el gasto fijo que se está editando
+
+      // Autocompletado inteligente de Conceptos Historicos
+      const opcionesConcepto = useMemo(() => {
+        const defaults = ['Kiosco', 'Uber / Taxi', 'Comida / Delivery', 'Fútbol / Deportes', 'Supermercado', 'Combustible'];
+        const historicos = db.gastosPuntuales.map(g => g.concepto);
+        // Filtramos para que no haya repetidos y queden los más nuevos
+        return [...new Set([...defaults, ...historicos])];
+      }, [db.gastosPuntuales]);
 
       // ==========================================
-      // 2. LECTURA DE NUBE
+      // 2. LECTURA Y ESCRITURA NUBE
       // ==========================================
       useEffect(() => {
         async function fetchNube() {
@@ -123,24 +133,33 @@
       };
 
       // ==========================================
-      // LÓGICA CORE: RESTAR DE BILLETERA
+      // LÓGICA DE NEGOCIO: DESCUENTO CON PROTECCIÓN
       // ==========================================
-      const descontarDeBilletera = (activosActuales, walletId, montoGasto, monedaGasto) => {
-        return activosActuales.map(wallet => {
-          if (wallet.id === parseInt(walletId)) {
-            let montoARestar = parseFloat(montoGasto);
-            
-            // Inteligencia Multimoneda: Si la billetera es USD y gasté en ARS, convierto.
-            if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
-            if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
-            
-            return { ...wallet, monto: (parseFloat(wallet.monto) - montoARestar).toFixed(2) }; // Resta real
-          }
-          return wallet;
-        });
+      const procesarDescuentoSeguro = (walletId, montoGasto, monedaGasto) => {
+        const activosClon = [...db.activos];
+        const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
+        if (idx === -1) return { success: false, msg: 'Billetera no encontrada' };
+        
+        const wallet = activosClon[idx];
+        let montoARestar = parseFloat(montoGasto);
+        
+        // Inteligencia cambiaria
+        if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
+        if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
+        
+        // PROTECCIÓN DE SALDO NEGATIVO (Validación Lógica)
+        if (parseFloat(wallet.monto) < montoARestar) {
+            return { 
+                success: false, 
+                msg: `¡Operación rechazada! Saldo insuficiente en ${wallet.nombre}.\nTenés ${wallet.monto} ${wallet.moneda} e intentás descontar el equivalente a ${montoARestar.toFixed(2)} ${wallet.moneda}.`
+            };
+        }
+        
+        activosClon[idx].monto = (parseFloat(wallet.monto) - montoARestar).toFixed(2);
+        return { success: true, activosActualizados: activosClon };
       };
 
-      // --- HANDLERS PARA AGREGAR ---
+      // --- HANDLERS AGREGAR ---
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre, monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda };
@@ -151,10 +170,12 @@
       const agregarGastoPuntual = (e) => {
         e.preventDefault();
         if (!nuevoGastoPuntual.walletId) return alert('Por favor, seleccioná de qué billetera salió el dinero.');
+        if (!nuevoGastoPuntual.concepto) return alert('Ingresá el concepto del gasto.');
         if (db.activos.length === 0) return alert('Primero tenés que crear una Billetera o Activo.');
 
-        // 1. Restamos la plata
-        const activosActualizados = descontarDeBilletera(db.activos, nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda);
+        // 1. Intento de resta de dinero (si da error, frena la función)
+        const operacion = procesarDescuentoSeguro(nuevoGastoPuntual.walletId, nuevoGastoPuntual.monto, nuevoGastoPuntual.moneda);
+        if (!operacion.success) { return alert(operacion.msg); }
         
         // 2. Anotamos el gasto
         const walletUsada = db.activos.find(w => w.id === parseInt(nuevoGastoPuntual.walletId));
@@ -163,13 +184,15 @@
           moneda: nuevoGastoPuntual.moneda, fecha: new Date().toLocaleDateString(), pagadoCon: walletUsada?.nombre || 'Desconocido'
         };
 
-        guardarEnNube({ ...db, activos: activosActualizados, gastosPuntuales: [item, ...db.gastosPuntuales] });
-        setNuevoGastoPuntual({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
+        guardarEnNube({ ...db, activos: operacion.activosActualizados, gastosPuntuales: [item, ...db.gastosPuntuales] });
+        
+        // Reseteo inteligente
+        setNuevoGastoPuntual({ concepto: '', monto: '', moneda: 'ARS', walletId: nuevoGastoPuntual.walletId }); // Mantiene la última billetera elegida por rapidez
+        setMostrarInputConceptoLibre(false);
       };
 
       const agregarGastoFijo = (e) => {
         e.preventDefault();
-        // Agregar fijo NO resta plata hoy, solo lo anota para pagar después
         const item = { 
           id: Date.now(), concepto: nuevoGastoFijo.concepto, monto: parseFloat(nuevoGastoFijo.monto) || 0, 
           moneda: nuevoGastoFijo.moneda, tipo: nuevoGastoFijo.tipo, diaVencimiento: nuevoGastoFijo.diaVencimiento,
@@ -184,10 +207,11 @@
       const procesarPagoFijo = (itemFijo) => {
         if (!pagoActivo.walletId) return alert('Elegí una billetera para descontar el pago.');
         
-        // 1. Restamos la plata de la billetera
-        const activosActualizados = descontarDeBilletera(db.activos, pagoActivo.walletId, itemFijo.monto, itemFijo.moneda);
+        // 1. Intento de resta
+        const operacion = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda);
+        if (!operacion.success) { return alert(operacion.msg); }
         
-        // 2. Actualizamos el estado del gasto (sumamos cuota o anotamos la fecha)
+        // 2. Guardamos el pago en la cuota
         const gastosFijosActualizados = db.gastosFijos.map(g => {
           if (g.id === itemFijo.id) {
             return { 
@@ -199,8 +223,8 @@
           return g;
         });
 
-        guardarEnNube({ ...db, activos: activosActualizados, gastosFijos: gastosFijosActualizados });
-        setPagoActivo({ idGasto: null, walletId: '' }); // Cerramos el menu de pago
+        guardarEnNube({ ...db, activos: operacion.activosActualizados, gastosFijos: gastosFijosActualizados });
+        setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
       // --- CÁLCULOS TOTALES ---
@@ -233,7 +257,7 @@
       }
 
       return (
-        <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-8 fade-in pb-20">
+        <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-8 fade-in pb-20 relative">
           
           {/* HEADER Y COTIZACIÓN */}
           <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl">
@@ -290,7 +314,7 @@
               <form onSubmit={agregarActivo} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                 <input type="text" required placeholder="Nombre (Ej: Mercadopago)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" />
                 <div className="flex gap-2">
-                  <input type="number" step="any" required placeholder="Monto" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-blue-500 text-lg" />
+                  <input type="number" step="any" required placeholder="Saldo inicial" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-blue-500 text-lg" />
                   <select value={nuevoActivo.moneda} onChange={e => setNuevoActivo({...nuevoActivo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white font-bold focus:outline-none focus:border-blue-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                   <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-5 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                 </div>
@@ -303,9 +327,11 @@
                       <p className="font-bold text-white text-base">{item.nombre}</p>
                       <p className="text-[11px] text-emerald-400 font-bold font-mono mt-1">Saldo: {item.monto} {item.moneda}</p>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <span className="font-mono font-black text-blue-400 text-lg">{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
-                      <button onClick={() => guardarEnNube({...db, activos: db.activos.filter(x => x.id !== item.id)})} className="text-slate-600 hover:text-rose-400 transition-colors p-2"><i className="fa-solid fa-trash"></i></button>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-black text-blue-400 text-lg mr-2">{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
+                      {/* BOTÓN PARA EDITAR ACTIVO */}
+                      <button onClick={() => setEditandoActivo({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
+                      <button onClick={() => guardarEnNube({...db, activos: db.activos.filter(x => x.id !== item.id)})} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
                     </div>
                   </div>
                 ))}
@@ -350,30 +376,36 @@
                             : <span className="bg-slate-800 text-slate-400 px-2 py-0.5 rounded text-[9px] ml-2 uppercase">Vence día {item.diaVencimiento}</span>
                           }
                         </p>
-                        <p className="text-[11px] text-slate-500 font-mono mt-1">Valor a descontar: {item.monto} {item.moneda}</p>
+                        <p className="text-[11px] text-slate-500 font-mono mt-1">Valor base: {item.monto} {item.moneda}</p>
                         {item.ultimoPago && <p className="text-[10px] text-emerald-500 mt-1"><i className="fa-solid fa-check mr-1"></i>Últ. pago: {item.ultimoPago}</p>}
                       </div>
-                      <span className="font-mono font-black text-amber-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="font-mono font-black text-amber-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
+                        <div className="flex gap-1 mt-1">
+                          {/* BOTON EDITAR GASTO FIJO */}
+                          <button onClick={() => setEditandoFijo({...item})} className="bg-slate-800 text-slate-400 hover:text-white px-2 py-1 rounded text-[9px]"><i className="fa-solid fa-pen"></i> Editar</button>
+                          <button onClick={() => guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id)})} className="bg-rose-950 text-rose-400 hover:bg-rose-900 px-2 py-1 rounded text-[9px]"><i className="fa-solid fa-trash"></i></button>
+                        </div>
+                      </div>
                     </div>
 
                     {/* SELECTOR DE PAGO INLINE */}
                     {pagoActivo.idGasto === item.id ? (
                       <div className="bg-slate-900 p-3 rounded-xl border border-amber-500/50 flex gap-2 fade-in">
                         <select value={pagoActivo.walletId} onChange={e => setPagoActivo({...pagoActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
-                          <option value="">¿Con qué billetera pagás?</option>
-                          {db.activos.map(a => <option key={a.id} value={a.id}>{a.nombre} (Saldo: {a.monto})</option>)}
+                          <option value="">¿De qué billetera pagás?</option>
+                          {db.activos.map(a => <option key={a.id} value={a.id}>{a.nombre} ({a.monto} {a.moneda})</option>)}
                         </select>
-                        <button onClick={() => procesarPagoFijo(item)} className="bg-emerald-600 text-white font-bold px-3 py-2 rounded-lg text-xs">Ok</button>
+                        <button onClick={() => procesarPagoFijo(item)} className="bg-emerald-600 text-white font-bold px-3 py-2 rounded-lg text-xs">Aceptar</button>
                         <button onClick={() => setPagoActivo({idGasto: null, walletId: ''})} className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs"><i className="fa-solid fa-xmark"></i></button>
                       </div>
                     ) : (
                       <div className="flex justify-end gap-2 border-t border-slate-800/50 pt-2">
                         {(!item.cuotasTotales || item.cuotasPagadas < item.cuotasTotales) && (
-                          <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-1.5 rounded-lg text-[10px] font-bold transition">
-                            {item.tipo === 'cuotas' ? 'Pagar Cuota' : 'Pagar este Mes'}
+                          <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-2 rounded-xl text-xs font-bold transition">
+                            <i className="fa-solid fa-money-bill-wave mr-1"></i> {item.tipo === 'cuotas' ? 'Descontar Cuota' : 'Descontar este Mes'}
                           </button>
                         )}
-                        <button onClick={() => guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id)})} className="bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-800 px-3 py-1.5 rounded-lg text-[10px] font-bold transition"><i className="fa-solid fa-trash"></i></button>
                       </div>
                     )}
                   </div>
@@ -389,18 +421,37 @@
               </div>
 
               <form onSubmit={agregarGastoPuntual} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
-                <input type="text" required placeholder="Concepto (Ej: Kiosco, Uber...)" value={nuevoGastoPuntual.concepto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, concepto: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-rose-500" />
+                {/* SELECTOR DE CONCEPTO CON MEMORIA */}
+                <div className="flex gap-2">
+                  {!mostrarInputConceptoLibre ? (
+                    <select value={nuevoGastoPuntual.concepto} onChange={e => {
+                        if (e.target.value === 'OTRO') { setMostrarInputConceptoLibre(true); setNuevoGastoPuntual({...nuevoGastoPuntual, concepto: ''}); }
+                        else setNuevoGastoPuntual({...nuevoGastoPuntual, concepto: e.target.value});
+                    }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-sm focus:outline-none focus:border-rose-500 appearance-none">
+                      <option value="">-- Seleccionar categoría / concepto --</option>
+                      {opcionesConcepto.map(op => <option key={op} value={op}>{op}</option>)}
+                      <option value="OTRO" className="font-bold text-rose-400">➕ Agregar uno nuevo...</option>
+                    </select>
+                  ) : (
+                    <div className="w-full flex gap-2 fade-in">
+                      <input type="text" required autoFocus placeholder="Escribí el nuevo concepto..." value={nuevoGastoPuntual.concepto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, concepto: e.target.value})} className="flex-1 bg-slate-900 border border-rose-500 rounded-xl px-4 py-3 text-white focus:outline-none" />
+                      <button type="button" onClick={() => {setMostrarInputConceptoLibre(false); setNuevoGastoPuntual({...nuevoGastoPuntual, concepto: ''});}} className="bg-slate-800 text-white px-4 py-3 rounded-xl"><i className="fa-solid fa-xmark"></i></button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex gap-2">
                   <div className="flex-1 flex border border-slate-700 rounded-xl overflow-hidden bg-slate-900 focus-within:border-rose-500">
-                    <input type="number" step="any" required placeholder="Monto" value={nuevoGastoPuntual.monto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, monto: e.target.value})} className="w-full px-3 py-3 bg-transparent text-white font-mono focus:outline-none text-lg" />
+                    <input type="number" step="any" required placeholder="Monto del gasto" value={nuevoGastoPuntual.monto} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, monto: e.target.value})} className="w-full px-3 py-3 bg-transparent text-white font-mono focus:outline-none text-lg" />
                     <select value={nuevoGastoPuntual.moneda} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, moneda: e.target.value})} className="bg-slate-800 px-2 text-white font-bold focus:outline-none"><option value="ARS">ARS</option><option value="USD">USD</option></select>
                   </div>
                 </div>
-                {/* SELECTOR DE BILLETERA OBLIGATORIO PARA GASTO SUELTO */}
+
+                {/* SELECTOR DE BILLETERA OBLIGATORIO */}
                 <div className="flex gap-2">
-                  <select value={nuevoGastoPuntual.walletId} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs focus:outline-none focus:border-rose-500">
-                    <option value="">¿De qué billetera pagaste?</option>
-                    {db.activos.map(a => <option key={a.id} value={a.id}>{a.nombre} (Saldo disp: {a.monto})</option>)}
+                  <select required value={nuevoGastoPuntual.walletId} onChange={e => setNuevoGastoPuntual({...nuevoGastoPuntual, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-rose-500">
+                    <option value="">¿De qué billetera lo pagás?</option>
+                    {db.activos.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto})</option>)}
                   </select>
                   <button type="submit" className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-5 py-3 rounded-xl transition"><i className="fa-solid fa-plus"></i></button>
                 </div>
@@ -412,7 +463,7 @@
                     <div>
                       <p className="font-bold text-white text-base">{item.concepto}</p>
                       <p className="text-[11px] text-slate-500 mt-1">{item.fecha} • {item.monto} {item.moneda}</p>
-                      <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Pagado de: {item.pagadoCon}</p>
+                      <p className="text-[9px] font-bold text-rose-500/70 uppercase mt-0.5">Dinero salió de: {item.pagadoCon}</p>
                     </div>
                     <div className="flex items-center gap-4">
                       <span className="font-mono font-black text-rose-400 text-lg">-{formatDinero(calcularUSD(item.monto, item.moneda))}</span>
@@ -424,6 +475,73 @@
             </div>
 
           </div>
+          
+          {/* ============================================== */}
+          {/* MODALES DE EDICIÓN FLOTANTES */}
+          {/* ============================================== */}
+          
+          {/* Modal Edición Activo/Billetera */}
+          {editandoActivo && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const actualizados = db.activos.map(a => a.id === editandoActivo.id ? { ...a, nombre: editandoActivo.nombre, monto: parseFloat(editandoActivo.monto) || 0, moneda: editandoActivo.moneda } : a);
+                guardarEnNube({ ...db, activos: actualizados });
+                setEditandoActivo(null);
+              }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
+                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Billetera</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nombre de la Billetera</label>
+                    <input type="text" required value={editandoActivo.nombre} onChange={e => setEditandoActivo({...editandoActivo, nombre: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Saldo Total</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoActivo.monto} onChange={e => setEditandoActivo({...editandoActivo, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
+                      <select value={editandoActivo.moneda} onChange={e => setEditandoActivo({...editandoActivo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition">Guardar</button>
+                  <button type="button" onClick={() => setEditandoActivo(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Modal Edición Gasto Fijo */}
+          {editandoFijo && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const actualizados = db.gastosFijos.map(g => g.id === editandoFijo.id ? { ...g, concepto: editandoFijo.concepto, monto: parseFloat(editandoFijo.monto) || 0, moneda: editandoFijo.moneda } : g);
+                guardarEnNube({ ...db, gastosFijos: actualizados });
+                setEditandoFijo(null);
+              }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
+                <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Gasto Fijo</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Concepto (Ej: Gimnasio)</label>
+                    <input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Precio de la Cuota</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoFijo.monto} onChange={e => setEditandoFijo({...editandoFijo, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
+                      <select value={editandoFijo.moneda} onChange={e => setEditandoFijo({...editandoFijo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 rounded-xl transition">Guardar Cambios</button>
+                  <button type="button" onClick={() => setEditandoFijo(null)} className="bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+
         </div>
       );
     }
