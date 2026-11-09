@@ -72,7 +72,7 @@
       const [db, setDb] = useState(DB_TEMPLATE);
       const [vista, setVista] = useState('patrimonio'); 
 
-      // ESTADOS DE LA APP (PRIVACIDAD Y MONEDA GLOBAL)
+      // ESTADOS DE LA APP
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
@@ -80,6 +80,9 @@
 
       // ESTADOS DE FORMULARIOS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
+      // NUEVO: ESTADO DE TRANSFERENCIA (MOVIMIENTO INTERNO)
+      const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
+
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
@@ -182,9 +185,6 @@
           setBloqueoCotizacion(false);
       };
 
-      // ==========================================
-      // FUNCIONES DE CONVERSIÓN Y VISUALIZACIÓN
-      // ==========================================
       const convertirParaMostrar = (montoBase, monedaBase) => {
           const val = parseFloat(montoBase) || 0;
           if (monedaVisual === 'USD') return monedaBase === 'USD' ? val : val / db.cotizacionDolar;
@@ -204,24 +204,7 @@
       };
 
       // ==========================================
-      // CORRECCIÓN: FUNCIONES DE LIMPIEZA
-      // ==========================================
-      const limpiarHistoriaConceptos = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos? (Tus gastos cargados no se borran)")) {
-          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
-          guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
-        }
-      };
-
-      const limpiarHistoriaStock = () => {
-        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos? (Tu stock actual no se borra)")) {
-          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
-          guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
-        }
-      };
-
-      // ==========================================
-      // MOTOR DEL ASISTENTE INTELIGENTE
+      // ASISTENTE INTELIGENTE
       // ==========================================
       useEffect(() => { if(chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [chatAsistente, vista]);
 
@@ -244,7 +227,7 @@
         if (lower.includes('gasto') || lower.includes('gastos')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('gasto'));
         else if (lower.includes('deuda') || lower.includes('deudas')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('deuda'));
         else if (lower.includes('stock') || lower.includes('repuesto') || lower.includes('bateria') || lower.includes('batería')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('stock') || l.accion.toLowerCase().includes('repuesto'));
-        else if (lower.includes('activo') || lower.includes('billetera') || lower.includes('plata')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('billetera') || l.accion.toLowerCase().includes('activo') || l.accion.toLowerCase().includes('pago'));
+        else if (lower.includes('activo') || lower.includes('billetera') || lower.includes('plata') || lower.includes('transferencia')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('billetera') || l.accion.toLowerCase().includes('activo') || l.accion.toLowerCase().includes('pago') || l.accion.toLowerCase().includes('movimiento'));
         else if (lower.includes('venta') || lower.includes('comision')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('venta') || l.accion.toLowerCase().includes('comisi'));
 
         if (lower.includes('bruno')) logsMatch = logsMatch.filter(l => l.usuario.toLowerCase() === 'bruno');
@@ -294,6 +277,7 @@
       // ==========================================
       // HANDLERS FINANCIEROS (PATRIMONIO Y GASTOS)
       // ==========================================
+      
       const agregarActivo = (e) => {
         e.preventDefault();
         const item = { id: Date.now(), nombre: nuevoActivo.nombre.trim(), monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
@@ -301,6 +285,30 @@
         guardarEnNube({ ...db, activos: [item, ...db.activos], actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevoActivo({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       };
+
+      // NUEVO: TRANSFERENCIA INTERNA
+      const procesarTransferenciaInterna = (e) => {
+          e.preventDefault();
+          if (nuevaTransferencia.origenId === nuevaTransferencia.destinoId) return alert('La billetera de origen no puede ser igual a la de destino.');
+          const montoTransferir = parseFloat(nuevaTransferencia.monto);
+          if (montoTransferir <= 0) return alert('Ingresá un monto válido para transferir.');
+
+          // 1. Intentamos descontar del Origen
+          const operacionDescuento = procesarDescuentoSeguro(nuevaTransferencia.origenId, montoTransferir, nuevaTransferencia.moneda, db.activos);
+          if (!operacionDescuento.success) return alert(operacionDescuento.msg);
+
+          // 2. Le sumamos ese dinero descontado al Destino (procesarReembolso suma plata)
+          const activosPostTransferencia = procesarReembolsoWallet(nuevaTransferencia.destinoId, montoTransferir, nuevaTransferencia.moneda, operacionDescuento.activosActualizados);
+
+          const nombreOrigen = db.activos.find(a => a.id === parseInt(nuevaTransferencia.origenId))?.nombre;
+          const nombreDestino = db.activos.find(a => a.id === parseInt(nuevaTransferencia.destinoId))?.nombre;
+          
+          const log = generarLog('Movimiento Interno', `Transfirió ${montoTransferir} ${nuevaTransferencia.moneda} de "${nombreOrigen}" hacia "${nombreDestino}".`);
+          
+          guardarEnNube({ ...db, activos: activosPostTransferencia, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          setNuevaTransferencia({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
+      };
+
 
       const agregarGastoPuntual = (e) => {
         e.preventDefault();
@@ -373,7 +381,7 @@
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
-      // --- DEUDAS (HACIA OTROS) ---
+      // --- DEUDAS (HACIA OTROS) CON MOTIVO ---
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
@@ -414,7 +422,7 @@
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '' });
       };
 
-      // --- DEUDAS HACIA MÍ (COBRAR) ---
+      // --- DEUDAS HACIA MÍ (COBRAR) CON MOTIVO ---
       const agregarDeudaCobrar = (e) => {
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Tenés que seleccionar de qué billetera le prestaste la plata para descontarla.');
@@ -448,6 +456,7 @@
         const activosConCobro = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobro, itemDeuda.moneda, db.activos);
         const nuevoMontoDeuda = parseFloat(itemDeuda.monto) - cobro;
         let deudasCobrarActualizadas = [];
+        
         if (nuevoMontoDeuda <= 0.05) deudasCobrarActualizadas = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
         else deudasCobrarActualizadas = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nuevoMontoDeuda.toFixed(2) } : d);
 
@@ -458,7 +467,6 @@
         setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '' });
       };
 
-      // CORRECCIÓN: ELIMINAR DEUDA A COBRAR
       const eliminarDeudaCobrar = (itemDeuda) => {
         if(window.confirm(`¿Estás seguro de eliminar la deuda de ${itemDeuda.deudor} sin recuperar la plata a ninguna billetera? (Se asume incobrable)`)){
             const log = generarLog('Eliminó Cuenta a Cobrar', `Borró la deuda de "${itemDeuda.deudor}" por ${itemDeuda.monto} ${itemDeuda.moneda} sin ingresarlo a billeteras (Incobrable).`, itemDeuda);
@@ -466,10 +474,9 @@
         }
       };
 
-      // --- VENTAS Y STOCK ---
+      // --- STOCK ---
       const agregarStock = (e) => {
         e.preventDefault();
-        if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         let stockActualizado = [...(db.stock || [])];
         const idx = stockActualizado.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
@@ -501,6 +508,7 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
+      // --- VENTAS ---
       const registrarVenta = (e) => {
           e.preventDefault();
           const cantidad = parseInt(nuevaVenta.cantidad) || 1;
@@ -543,6 +551,7 @@
       const totalStockUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
       const totalDeudasPendientesUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalDeudasCobrarUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
+      
       const totalGastosFijosUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const totalGastosPuntualesUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       
@@ -697,8 +706,8 @@
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-3xl p-6 shadow-xl lg:col-span-3 xl:col-span-1">
-                    <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
-                    <h2 className={`text-4xl font-black ${patrimonioNetoRealUSD >= 0 ? 'text-white' : 'text-rose-400'}`}>
+                    <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 relative z-10"><i className="fa-solid fa-scale-balanced mr-2"></i>Patrimonio Neto Real</p>
+                    <h2 className={`text-4xl font-black relative z-10 ${patrimonioNetoRealUSD >= 0 ? 'text-white' : 'text-rose-400'}`}>
                       {patrimonioNetoRealUSD < 0 ? '-' : ''}{formatDinero(Math.abs(convertirParaMostrar(patrimonioNetoRealUSD, 'USD')))}
                     </h2>
                     <p className="text-slate-400 text-[10px] uppercase font-bold mt-2">Suma de todo - Deudas a otros</p>
@@ -729,6 +738,44 @@
                   </div>
                 </div>
 
+                {/* TRANSFERENCIAS (NUEVO) */}
+                <div className="bg-gradient-to-r from-slate-900 to-indigo-950/20 border border-indigo-500/20 rounded-3xl p-6 shadow-xl max-w-4xl mx-auto">
+                  <div className="border-b border-indigo-500/20 pb-3 mb-4">
+                    <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-arrow-right-arrow-left text-indigo-400 mr-2"></i>Movimiento Interno</h3>
+                    <p className="text-xs text-slate-400 mt-1">Transferir plata entre tus billeteras (No altera tu Patrimonio Neto).</p>
+                  </div>
+                  
+                  <form onSubmit={procesarTransferenciaInterna} className="flex flex-col md:flex-row gap-3 items-end">
+                    <div className="flex-1 w-full">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Origen (Sale plata)</label>
+                      <select required value={nuevaTransferencia.origenId} onChange={e => setNuevaTransferencia({...nuevaTransferencia, origenId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-indigo-500">
+                        <option value="">Elegí billetera...</option>
+                        {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
+                      </select>
+                    </div>
+                    
+                    <div className="flex items-center justify-center px-2 text-indigo-500/50 hidden md:block pb-3"><i className="fa-solid fa-arrow-right"></i></div>
+
+                    <div className="flex-1 w-full">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Destino (Entra plata)</label>
+                      <select required value={nuevaTransferencia.destinoId} onChange={e => setNuevaTransferencia({...nuevaTransferencia, destinoId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none focus:border-indigo-500">
+                        <option value="">Elegí billetera...</option>
+                        {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="flex-1 w-full">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Monto a mover</label>
+                      <div className="flex">
+                        <input type="number" step="any" required placeholder="0.00" value={nuevaTransferencia.monto} onChange={e => setNuevaTransferencia({...nuevaTransferencia, monto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-l-xl px-3 py-3 text-white font-mono focus:outline-none focus:border-indigo-500" />
+                        <select value={nuevaTransferencia.moneda} onChange={e => setNuevaTransferencia({...nuevaTransferencia, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-r-xl px-2 py-3 text-white font-bold border-l-0 focus:outline-none focus:border-indigo-500"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                      </div>
+                    </div>
+                    <button type="submit" className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-3 rounded-xl transition">Mover</button>
+                  </form>
+                </div>
+
+                {/* CREACIÓN DE ACTIVOS */}
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl max-w-4xl mx-auto">
                   <div className="border-b border-slate-800 pb-3">
                     <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-wallet text-blue-400 mr-2"></i>Gestión de Cuentas y Activos</h3>
@@ -1012,7 +1059,7 @@
               </div>
             )}
 
-            {/* VISTA 4: DEUDAS A OTROS */}
+            {/* VISTA 4: DEUDAS A OTROS (Con Motivo) */}
             {vista === 'deudas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1090,7 +1137,7 @@
               </div>
             )}
 
-            {/* VISTA 5: DEUDAS HACIA MÍ (COBRAR) */}
+            {/* VISTA 5: DEUDAS HACIA MÍ (COBRAR) CON MOTIVO */}
             {vista === 'cobrar' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 
@@ -1419,7 +1466,7 @@
                     <input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Precio de la Cuota</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Precio Original de la Cuota</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoFijo.monto} onChange={e => setEditandoFijo({...editandoFijo, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoFijo.moneda} onChange={e => setEditandoFijo({...editandoFijo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1454,7 +1501,7 @@
                     <input type="text" required value={editandoDeuda.motivo} onChange={e => setEditandoDeuda({...editandoDeuda, motivo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto Pendiente (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeuda.monto} onChange={e => setEditandoDeuda({...editandoDeuda, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoDeuda.moneda} onChange={e => setEditandoDeuda({...editandoDeuda, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1489,7 +1536,7 @@
                     <input type="text" required value={editandoDeudaCobrar.motivo} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, motivo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto a Cobrar</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Nuevo Monto a Cobrar (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeudaCobrar.monto} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoDeudaCobrar.moneda} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1520,7 +1567,7 @@
                     <input type="text" required value={editandoStock.concepto} onChange={e => setEditandoStock({...editandoStock, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Costo Unitario (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoStock.monto} onChange={e => setEditandoStock({...editandoStock, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoStock.moneda} onChange={e => setEditandoStock({...editandoStock, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
@@ -1545,7 +1592,7 @@
                     <input type="text" required value={editandoGastoPuntual.concepto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto</label>
+                    <label className="text-xs text-slate-400 font-bold mb-1 block">Monto Correcto (Moneda Original)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoGastoPuntual.monto} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, monto: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white font-mono text-lg" />
                       <select value={editandoGastoPuntual.moneda} onChange={e => setEditandoGastoPuntual({...editandoGastoPuntual, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
