@@ -52,7 +52,8 @@
 
     const DB_TEMPLATE = { 
         cotizacionDolar: 1500, fechaUltimaCotizacion: '',
-        activos: [], gastosFijos: [], gastosPuntuales: [], deudas: [], deudasCobrar: [], 
+        activos: [], gastosFijos: [], gastosPuntuales: [], 
+        deudas: [], deudasCobrar: [], 
         stock: [], ventas: [], taller: [], reparacionesFin: [],
         historiaConceptos: [], historiaStock: [], historiaGremios: ['iConnecture'], historiaMetodosPago: ['Efectivo', 'Transferencia'],
         actividad: [] 
@@ -73,7 +74,6 @@
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      // ESTADOS DE FORMULARIOS PATRIMONIALES Y VENTAS
       const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
@@ -85,17 +85,14 @@
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
-      // ESTADOS TALLER Y REPARACIONES
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS', metodoPago: '' });
       const [mostrarInputMetodoLibre, setMostrarInputMetodoLibre] = useState(false);
 
-      // FILTROS TALLER
       const [filtroRep, setFiltroRep] = useState({ cliente: '', telefono: '', modelo: '', imei: '', origen: '', estadoCobro: '', metodoPago: '', desde: '', hasta: '' });
 
-      // ESTADOS UI DE MODALES
       const [editandoDolar, setEditandoDolar] = useState(false);
       const [dolarInput, setDolarInput] = useState('');
       const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
@@ -110,12 +107,11 @@
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
-      // ESTADOS DE AUDITORÍA
       const [filtroUsuario, setFiltroUsuario] = useState('');
       const [filtroDesde, setFiltroDesde] = useState('');
       const [filtroHasta, setFiltroHasta] = useState('');
       const [consultaAsistente, setConsultaAsistente] = useState('');
-      const [chatAsistente, setChatAsistente] = useState([{ emisor: 'bot', texto: '¡Hola! Soy tu asistente de auditoría.' }]);
+      const [chatAsistente, setChatAsistente] = useState([{ emisor: 'bot', texto: '¡Hola! Soy tu asistente de auditoría. Preguntame por ej: "qué gastos agregué ayer", o "movimientos de stock".' }]);
       const chatEndRef = useRef(null);
 
       const generarLog = (accion, detalle, datosExtra = null) => ({ id: Date.now() + Math.floor(Math.random() * 1000), fecha: new Date().toISOString(), usuario: 'Bruno', accion, detalle, datosExtra });
@@ -125,7 +121,6 @@
       const opcionesGremios = useMemo(() => [...new Set(db.historiaGremios || ['iConnecture'])], [db.historiaGremios]);
       const billeterasDisponibles = useMemo(() => (db.activos || []).filter(a => a.tipo !== 'activo'), [db.activos]);
 
-      // INICIO Y CARGA
       useEffect(() => {
         async function fetchNube() {
           if (!supaClient) { setIsLoaded(true); return; }
@@ -156,7 +151,10 @@
               };
               setDb(baseCargada);
               const hoyStr = new Date().toLocaleDateString();
-              if (baseCargada.fechaUltimaCotizacion !== hoyStr) { setCotizacionDiariaInput(baseCargada.cotizacionDolar); setBloqueoCotizacion(true); }
+              if (baseCargada.fechaUltimaCotizacion !== hoyStr) {
+                  setCotizacionDiariaInput(baseCargada.cotizacionDolar);
+                  setBloqueoCotizacion(true);
+              }
             }
           } catch (err) { console.error("Iniciando de cero."); }
           setIsLoaded(true);
@@ -168,21 +166,25 @@
         setDb(nuevoEstadoDb);
         if (supaClient) {
           const { error } = await supaClient.from('iconnecture_data').update({ payload: nuevoEstadoDb }).eq('id', 1);
-          if (error) alert("Atención: No se pudo guardar en la nube.");
+          if (error) alert("Atención: No se pudo guardar en la nube. Revisá tu conexión.");
         }
       };
 
-      const login = (e) => { e.preventDefault(); if (passInput === 'bruno123') { setSesion(true); setErrorLogin(''); } else { setErrorLogin('Clave incorrecta'); setPassInput(''); } };
+      const login = (e) => {
+        e.preventDefault();
+        if (passInput === 'bruno123') { setSesion(true); setErrorLogin(''); }
+        else { setErrorLogin('Clave incorrecta'); setPassInput(''); }
+      };
 
       const procesarBloqueoCotizacion = (e) => {
           e.preventDefault();
           const val = parseFloat(cotizacionDiariaInput) || 1500;
+          const hoyStr = new Date().toLocaleDateString();
           const log = generarLog('Actualizó Cotización Diaria', `Confirmó cotización a $${val}`);
-          guardarEnNube({...db, cotizacionDolar: val, fechaUltimaCotizacion: new Date().toLocaleDateString(), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+          guardarEnNube({...db, cotizacionDolar: val, fechaUltimaCotizacion: hoyStr, actividad: [log, ...(db.actividad || [])].slice(0, 500)});
           setBloqueoCotizacion(false);
       };
 
-      // MÉTODOS MATEMÁTICOS PRECISOS
       const redondear = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
       const aUSDBase = (monto, moneda, coti) => moneda === 'USD' ? (parseFloat(monto) || 0) : ((parseFloat(monto) || 0) / coti);
       
@@ -206,14 +208,69 @@
           return Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)); 
       };
 
+      const limpiarHistoriaConceptos = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos?")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
+          guardarEnNube({...db, historiaConceptos: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      const limpiarHistoriaStock = () => {
+        if(window.confirm("¿Estás seguro de vaciar el historial de nombres de repuestos?")) {
+          const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de stock.');
+          guardarEnNube({...db, historiaStock: [], actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+        }
+      };
+
+      useEffect(() => { if(chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [chatAsistente, vista]);
+
+      const procesarConsultaAsistente = (e) => {
+        e.preventDefault();
+        const textoUser = consultaAsistente.trim();
+        if(!textoUser) return;
+        setChatAsistente(prev => [...prev, { emisor: 'user', texto: textoUser }]);
+        setConsultaAsistente('');
+
+        const lower = textoUser.toLowerCase();
+        let logsMatch = [...(db.actividad || [])];
+        const hoy = new Date();
+        const ayer = new Date(); ayer.setDate(hoy.getDate() - 1);
+
+        if (lower.includes('hoy')) logsMatch = logsMatch.filter(l => new Date(l.fecha).toLocaleDateString() === hoy.toLocaleDateString());
+        else if (lower.includes('ayer')) logsMatch = logsMatch.filter(l => new Date(l.fecha).toLocaleDateString() === ayer.toLocaleDateString());
+
+        if (lower.includes('gasto') || lower.includes('gastos')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('gasto'));
+        else if (lower.includes('deuda') || lower.includes('deudas')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('deuda'));
+        else if (lower.includes('stock') || lower.includes('repuesto')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('stock') || l.accion.toLowerCase().includes('repuesto'));
+        else if (lower.includes('activo') || lower.includes('billetera') || lower.includes('transferencia')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('billetera') || l.accion.toLowerCase().includes('activo') || l.accion.toLowerCase().includes('movimiento'));
+        else if (lower.includes('venta') || lower.includes('comision')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('venta') || l.accion.toLowerCase().includes('comisi'));
+        else if (lower.includes('taller') || lower.includes('reparacion')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('taller') || l.accion.toLowerCase().includes('equipo'));
+
+        if (lower.includes('bruno')) logsMatch = logsMatch.filter(l => l.usuario.toLowerCase() === 'bruno');
+
+        setTimeout(() => {
+            let respuesta = '';
+            if (logsMatch.length === 0) respuesta = "Revisé los registros y no encontré ningún movimiento que coincida con lo que me pedís.";
+            else {
+                let limite = 5;
+                const ultimos = logsMatch.slice(0, limite);
+                respuesta = `Encontré ${logsMatch.length} movimientos relacionados a eso. Acá tenés los más recientes:\n\n` + ultimos.map(l => `• ${l.detalle}`).join('\n\n');
+                if(logsMatch.length > limite) respuesta += `\n\n*(Y ${logsMatch.length - limite} movimientos más que podés ver abajo en la tabla)*`;
+            }
+            setChatAsistente(prev => [...prev, { emisor: 'bot', texto: respuesta }]);
+        }, 500); 
+      };
+
       const procesarDescuentoSeguro = (walletId, montoGasto, monedaGasto, activosActuales) => {
         const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
         if (idx === -1) return { success: false, msg: 'Billetera no encontrada' };
+        
         const wallet = activosClon[idx];
         let montoARestar = parseFloat(montoGasto);
         if (monedaGasto === 'ARS' && wallet.moneda === 'USD') montoARestar = montoARestar / db.cotizacionDolar;
         if (monedaGasto === 'USD' && wallet.moneda === 'ARS') montoARestar = montoARestar * db.cotizacionDolar;
+        
         if (parseFloat(wallet.monto) < redondear(montoARestar)) return { success: false, msg: `Saldo insuficiente.` };
         activosClon[idx].monto = (parseFloat(wallet.monto) - montoARestar).toFixed(2);
         return { success: true, activosActualizados: activosClon };
@@ -223,17 +280,15 @@
         const activosClon = [...activosActuales];
         const idx = activosClon.findIndex(w => w.id === parseInt(walletId));
         if (idx === -1) return activosClon; 
+        
         const wallet = activosClon[idx];
         let montoASumar = parseFloat(montoAReembolsar);
         if (monedaReembolso === 'ARS' && wallet.moneda === 'USD') montoASumar = montoASumar / db.cotizacionDolar;
         if (monedaReembolso === 'USD' && wallet.moneda === 'ARS') montoASumar = montoASumar * db.cotizacionDolar;
+        
         activosClon[idx].monto = (parseFloat(wallet.monto) + montoASumar).toFixed(2);
         return activosClon;
       };
-
-      // ==========================================
-      // LÓGICA DE MÓDULOS
-      // ==========================================
 
       const agregarActivo = (e) => {
         e.preventDefault();
@@ -245,15 +300,15 @@
 
       const procesarTransferenciaInterna = (e) => {
           e.preventDefault();
-          if (nuevaTransferencia.origenId === nuevaTransferencia.destinoId) return alert('La billetera origen debe ser distinta al destino.');
+          if (nuevaTransferencia.origenId === nuevaTransferencia.destinoId) return alert('Billetera origen debe ser distinta al destino.');
           const mTransferir = parseFloat(nuevaTransferencia.monto);
           if (mTransferir <= 0) return alert('Monto inválido.');
-          const operacionDescuento = procesarDescuentoSeguro(nuevaTransferencia.origenId, mTransferir, nuevaTransferencia.moneda, db.activos);
-          if (!operacionDescuento.success) return alert(operacionDescuento.msg);
-          const activosPost = procesarReembolsoWallet(nuevaTransferencia.destinoId, mTransferir, nuevaTransferencia.moneda, operacionDescuento.activosActualizados);
-          const nombreOrigen = db.activos.find(a => a.id === parseInt(nuevaTransferencia.origenId))?.nombre;
-          const nombreDestino = db.activos.find(a => a.id === parseInt(nuevaTransferencia.destinoId))?.nombre;
-          const log = generarLog('Movimiento Interno', `Transfirió ${mTransferir} ${nuevaTransferencia.moneda} de "${nombreOrigen}" hacia "${nombreDestino}".`);
+          const op = procesarDescuentoSeguro(nuevaTransferencia.origenId, mTransferir, nuevaTransferencia.moneda, db.activos);
+          if (!op.success) return alert(op.msg);
+          const activosPost = procesarReembolsoWallet(nuevaTransferencia.destinoId, mTransferir, nuevaTransferencia.moneda, op.activosActualizados);
+          const nOrigen = db.activos.find(a => a.id === parseInt(nuevaTransferencia.origenId))?.nombre;
+          const nDestino = db.activos.find(a => a.id === parseInt(nuevaTransferencia.destinoId))?.nombre;
+          const log = generarLog('Movimiento Interno', `Transfirió ${mTransferir} ${nuevaTransferencia.moneda} de "${nOrigen}" hacia "${nDestino}".`);
           guardarEnNube({ ...db, activos: activosPost, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaTransferencia({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       };
@@ -273,6 +328,30 @@
         setMostrarInputConceptoLibre(false);
       };
 
+      const eliminarGastoPuntual = (itemGasto) => {
+        if(window.confirm(`¿Eliminar gasto de ${itemGasto.concepto}? El dinero será reembolsado a ${itemGasto.pagadoCon}.`)){
+            const activosReembolsados = procesarReembolsoWallet(itemGasto.walletIdOriginal, itemGasto.monto, itemGasto.moneda, db.activos);
+            const log = generarLog('Eliminó Gasto Suelto', `Eliminó gasto de "${itemGasto.concepto}" por ${itemGasto.monto} ${itemGasto.moneda}. Dinero reembolsado a ${itemGasto.pagadoCon}.`, itemGasto);
+            guardarEnNube({ ...db, activos: activosReembolsados, gastosPuntuales: db.gastosPuntuales.filter(x => x.id !== itemGasto.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        }
+      };
+
+      const procesarEdicionGastoPuntual = (e) => {
+        e.preventDefault();
+        const gastoOrig = db.gastosPuntuales.find(g => g.id === editandoGastoPuntual.id);
+        const activosReemb = procesarReembolsoWallet(gastoOrig.walletIdOriginal, gastoOrig.monto, gastoOrig.moneda, db.activos);
+        const opNuevo = procesarDescuentoSeguro(editandoGastoPuntual.walletIdOriginal, editandoGastoPuntual.monto, editandoGastoPuntual.moneda, activosReemb);
+        if (!opNuevo.success) return alert(opNuevo.msg + " (El gasto original no se modificó).");
+        const nombreWalletNueva = opNuevo.activosActualizados.find(w => w.id === parseInt(editandoGastoPuntual.walletIdOriginal))?.nombre;
+        const gastosAc = db.gastosPuntuales.map(g => {
+            if (g.id === editandoGastoPuntual.id) return { ...g, concepto: editandoGastoPuntual.concepto, monto: parseFloat(editandoGastoPuntual.monto), moneda: editandoGastoPuntual.moneda, walletIdOriginal: parseInt(editandoGastoPuntual.walletIdOriginal), pagadoCon: nombreWalletNueva };
+            return g;
+        });
+        const log = generarLog('Editó Gasto Suelto', `Editó gasto a "${editandoGastoPuntual.concepto}". Modificó monto a ${editandoGastoPuntual.monto}.`, { original: gastoOrig, nuevo: editandoGastoPuntual });
+        guardarEnNube({ ...db, activos: opNuevo.activosActualizados, gastosPuntuales: gastosAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setEditandoGastoPuntual(null);
+      };
+
       const agregarGastoFijo = (e) => {
         e.preventDefault();
         const item = { 
@@ -288,13 +367,13 @@
         if (!pagoActivo.walletId) return alert('Elegí una billetera.');
         const op = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda, db.activos);
         if (!op.success) return alert(op.msg); 
-        const gastosActualizados = db.gastosFijos.map(g => {
+        const gastosFijosAc = db.gastosFijos.map(g => {
           if (g.id === itemFijo.id) return { ...g, cuotasPagadas: g.tipo === 'cuotas' ? g.cuotasPagadas + 1 : g.cuotasPagadas, ultimoPago: new Date().toLocaleDateString() };
           return g;
         });
-        const wallet = op.activosActualizados.find(w => w.id === parseInt(pagoActivo.walletId))?.nombre;
-        const log = generarLog('Efectuó Pago', `Pagó "${itemFijo.concepto}" (${itemFijo.monto} ${itemFijo.moneda}) desde ${wallet}.`, itemFijo);
-        guardarEnNube({ ...db, activos: op.activosActualizados, gastosFijos: gastosActualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        const walletUsada = op.activosActualizados.find(w => w.id === parseInt(pagoActivo.walletId))?.nombre;
+        const log = generarLog('Efectuó Pago', `Pagó "${itemFijo.concepto}" (${itemFijo.monto} ${itemFijo.moneda}) desde ${walletUsada}.`, itemFijo);
+        guardarEnNube({ ...db, activos: op.activosActualizados, gastosFijos: gastosFijosAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setPagoActivo({ idGasto: null, walletId: '' }); 
       };
 
@@ -321,20 +400,16 @@
         if (!pagoDeudaActivo.walletId || !pagoDeudaActivo.montoAbono) return alert('Completá los datos.');
         const abonoFisico = parseFloat(pagoDeudaActivo.montoAbono);
         if (abonoFisico <= 0) return alert('Monto inválido.');
-        const abonoBaseOriginal = aUSDBase(abonoFisico, pagoDeudaActivo.monedaAbono, db.cotizacionDolar);
-        
-        let abonoEnMonedaDeuda = abonoBaseOriginal;
-        if (itemDeuda.moneda === 'ARS') abonoEnMonedaDeuda = abonoBaseOriginal * db.cotizacionDolar;
-
-        if (redondear(abonoEnMonedaDeuda) > parseFloat(itemDeuda.monto) + 0.05) return alert(`Intento de sobrepago.`);
+        let abonoConvertido = abonoFisico;
+        if (pagoDeudaActivo.monedaAbono === 'ARS' && itemDeuda.moneda === 'USD') abonoConvertido = abonoFisico / db.cotizacionDolar;
+        if (pagoDeudaActivo.monedaAbono === 'USD' && itemDeuda.moneda === 'ARS') abonoConvertido = abonoFisico * db.cotizacionDolar;
+        if (redondear(abonoConvertido) > parseFloat(itemDeuda.monto) + 0.05) return alert(`Intento de sobrepago.`);
         const op = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abonoFisico, pagoDeudaActivo.monedaAbono, db.activos);
         if (!op.success) return alert(op.msg); 
-
-        const nvoMonto = parseFloat(itemDeuda.monto) - abonoEnMonedaDeuda;
+        const nvoMonto = parseFloat(itemDeuda.monto) - abonoConvertido;
         let deudasAc = [];
         if (nvoMonto <= 0.05) deudasAc = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
         else deudasAc = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nvoMonto.toFixed(4) } : d);
-
         const wUsada = op.activosActualizados.find(w => w.id === parseInt(pagoDeudaActivo.walletId))?.nombre;
         const log = generarLog('Abonó a Deuda', `Pagó ${abonoFisico} ${pagoDeudaActivo.monedaAbono} a "${itemDeuda.acreedor}" desde ${wUsada}. Restan ${nvoMonto.toFixed(2)} ${itemDeuda.moneda}.`);
         guardarEnNube({ ...db, activos: op.activosActualizados, deudas: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -347,11 +422,9 @@
         const montoPrestado = parseFloat(nuevaDeudaCobrar.monto) || 0;
         const op = procesarDescuentoSeguro(nuevaDeudaCobrar.walletId, montoPrestado, nuevaDeudaCobrar.moneda, db.activos);
         if (!op.success) return alert(op.msg);
-
         const montoUSD = aUSDBase(montoPrestado, nuevaDeudaCobrar.moneda, db.cotizacionDolar);
         let deudasAc = [...(db.deudasCobrar || [])];
         const idx = deudasAc.findIndex(d => d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() && d.motivo.trim().toLowerCase() === nuevaDeudaCobrar.motivo.trim().toLowerCase());
-
         let log;
         if (idx !== -1) {
           deudasAc[idx].monto = (parseFloat(deudasAc[idx].monto) + montoUSD).toFixed(4);
@@ -371,13 +444,11 @@
         if (cobroFisico <= 0) return alert('Monto inválido.');
         const abonoBaseUSD = aUSDBase(cobroFisico, cobroDeudaActivo.monedaCobro, db.cotizacionDolar);
         if (redondear(abonoBaseUSD) > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar de más.');
-
         const activosAc = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroFisico, cobroDeudaActivo.monedaCobro, db.activos);
         const nvoMonto = parseFloat(itemDeuda.monto) - abonoBaseUSD;
         let deudasAc = [];
         if (nvoMonto <= 0.05) deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
         else deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nvoMonto.toFixed(4) } : d);
-
         const wUsada = activosAc.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
         const log = generarLog('Registró Cobro', `Recibió ${cobroFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Entró a ${wUsada}.`);
         guardarEnNube({ ...db, activos: activosAc, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -395,16 +466,25 @@
           stockAc[idx].cantidad = parseInt(stockAc[idx].cantidad) + parseInt(nuevoStock.cantidad);
           stockAc[idx].monto = parseFloat(nuevoStock.monto) || 0;
           stockAc[idx].moneda = nuevoStock.moneda;
-          log = generarLog('Aumentó Stock', `Sumó ${nuevoStock.cantidad} unid. de "${stockAc[idx].concepto}".`, stockAc[idx]);
+          log = generarLog('Aumentó Repuesto Existente', `Sumó ${nuevoStock.cantidad} unid. de "${stockAc[idx].concepto}".`, stockAc[idx]);
         } else {
           const item = { id: Date.now(), concepto: conceptoTrim, cantidad: parseInt(nuevoStock.cantidad) || 1, monto: parseFloat(nuevoStock.monto) || 0, moneda: nuevoStock.moneda };
           stockAc.unshift(item);
-          log = generarLog('Creó Stock', `Ingresó ${item.cantidad} unid. de "${item.concepto}".`, item);
+          log = generarLog('Creó Nuevo Repuesto', `Ingresó ${item.cantidad} unid. de "${item.concepto}".`, item);
         }
         const historiaNueva = [...new Set([conceptoTrim, ...(db.historiaStock || [])])];
         guardarEnNube({ ...db, stock: stockAc, historiaStock: historiaNueva, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevoStock({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
         setMostrarInputStockLibre(false);
+      };
+
+      const modificarCantidadStock = (id, delta) => {
+        const itemAfectado = db.stock.find(s => s.id === id);
+        const nuevaCant = Math.max(0, parseInt(itemAfectado.cantidad) + delta);
+        const stockActualizado = db.stock.map(s => s.id === id ? { ...s, cantidad: nuevaCant } : s);
+        const accionTexto = delta > 0 ? 'Sumó +1 unidad' : 'Restó -1 unidad';
+        const log = generarLog('Modificó Cantidad Stock', `${accionTexto} de "${itemAfectado.concepto}". Quedan ${nuevaCant}.`, { itemAfectado, delta });
+        guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
       const registrarVenta = (e) => {
@@ -439,6 +519,13 @@
           const log = generarLog('Registró Venta', `Vendió ${cant} equipos. Sumó ${totalComi.toFixed(2)} ${nuevaVenta.moneda} a Cuentas a Cobrar.`, regVenta);
           guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaVenta({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
+      };
+
+      const eliminarRegistroVenta = (itemVenta) => {
+          if (window.confirm("¿Seguro querés eliminar TODAS las ventas de este día? Esto NO restará la plata de tus Cuentas por Cobrar.")) {
+              const log = generarLog('Eliminó Registro de Venta', `Borró el historial de ventas del día ${itemVenta.fecha}.`);
+              guardarEnNube({ ...db, ventas: db.ventas.filter(v => v.id !== itemVenta.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          }
       };
 
       const agregarReparacion = (e) => {
@@ -506,17 +593,18 @@
           setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
       };
 
-      const cobrarReparacionClienteParcial = (e, item) => {
+      const cobrarReparacionClienteParcial = (e, itemRep) => {
           e.preventDefault();
           if (!panelCobroReparacion.metodoPago || !panelCobroReparacion.montoCobro) return alert('Completá método y monto.');
           const mFisico = parseFloat(panelCobroReparacion.montoCobro);
+          if (mFisico <= 0) return alert('Monto inválido.');
           const aUSD = aUSDBase(mFisico, panelCobroReparacion.monedaPago, db.cotizacionDolar);
-          const adeud = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : parseFloat(item.montoCobrado);
+          const adeud = itemRep.montoAdeudadoRestante !== undefined ? parseFloat(itemRep.montoAdeudadoRestante) : parseFloat(itemRep.montoCobrado);
           const nvoRestante = adeud - aUSD;
           if (redondear(nvoRestante) < -0.05) return alert('Cobrando de más.');
           
-          const costoU = parseFloat(item.costoRepuestoUSD) || 0;
-          const totU = parseFloat(item.montoCobrado);
+          const costoU = parseFloat(itemRep.costoRepuestoUSD) || 0;
+          const totU = parseFloat(itemRep.montoCobrado);
           const ganNeta = Math.max(0, totU - costoU);
           const prop = totU > 0 ? ((costoU + (ganNeta/2)) / totU) : 0;
           const miParteAbonoUSD = aUSD * prop;
@@ -529,7 +617,7 @@
 
           const estadoF = redondear(nvoRestante) <= 0 ? 'cobrado' : 'pendiente';
           const repsF = (db.reparacionesFin || []).map(r => {
-              if (r.id === item.id) {
+              if (r.id === itemRep.id) {
                   let m = r.metodosPago || [];
                   const nMet = panelCobroReparacion.metodoPago.trim();
                   if (nMet && !m.includes(nMet)) m = [...m, nMet];
@@ -541,13 +629,27 @@
           const mt = panelCobroReparacion.metodoPago.trim();
           if (mt) hMet = [...new Set([mt, ...hMet])];
 
-          const log = generarLog('Cobró Rep. Local', `[${item.equipoOriginal.modelo}]: Se anotó el 50% de ${mFisico} ${panelCobroReparacion.monedaPago} vía ${mt} a tu favor.`);
+          const log = generarLog('Cobró Rep. Local', `[${itemRep.equipoOriginal.modelo}]: Anotó 50% de ${mFisico} ${panelCobroReparacion.monedaPago} vía ${mt} a tu favor.`);
           guardarEnNube({ ...db, deudasCobrar: dCobrar, reparacionesFin: repsF, historiaMetodosPago: hMet, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setPanelCobroReparacion({ idReparacion: null, metodoPago: '', montoCobro: '', monedaPago: 'ARS' });
           setMostrarInputMetodoLibre(false);
       };
 
-      // FILTROS TALLER
+      const eliminarEquipoTaller = (itemEquipo) => {
+          if (window.confirm(`¿Estás seguro de ELIMINAR el registro de este ${itemEquipo.modelo} sin cobrar nada?`)) {
+              const log = generarLog('Eliminó Equipo de Taller', `Se eliminó el ${itemEquipo.modelo}.`, itemEquipo);
+              guardarEnNube({ ...db, taller: (db.taller || []).filter(e => e.id !== itemEquipo.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          }
+      };
+
+      const eliminarReparacionHistorial = (itemRep) => {
+          if (window.confirm("¿Seguro querés eliminar este registro histórico?")) {
+              const log = generarLog('Eliminó Historial de Reparación', `Borró el historial del ${itemRep.equipoOriginal.modelo}.`);
+              guardarEnNube({ ...db, reparacionesFin: db.reparacionesFin.filter(v => v.id !== itemRep.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          }
+      };
+
+      // FILTROS REPARACIONES
       const reparacionesFiltradas = useMemo(() => {
           return (db.reparacionesFin || []).filter(item => {
               let ok = true; const eq = item.equipoOriginal;
@@ -567,12 +669,12 @@
           });
       }, [db.reparacionesFin, filtroRep]);
 
-      // CÁLCULOS GLOBALES
+      // CÁLCULOS GLOBALES DASHBOARD
       const tBillUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tActFisUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tStkUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
       const tDeudPenUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
-      const tDeudCobUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + parseFloat(item.monto), 0); // Ya unificamos a USD en la base
+      const tDeudCobUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + parseFloat(item.monto), 0); 
       
       const tGastFijUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tGastPuntUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -607,7 +709,6 @@
       }, 0);
 
       const tCobPendTallUSD = (db.reparacionesFin || []).reduce((acc, item) => item.estadoCobro === 'pendiente' ? acc + (parseFloat(item.montoAdeudadoRestante) || 0) : acc, 0);
-
       const patrimonioNetoRealUSD = tBillUSD + tActFisUSD + tStkUSD + tDeudCobUSD + tCobPendTallUSD - tDeudPenUSD;
 
       const gastosPorCat = useMemo(() => {
@@ -806,7 +907,7 @@
                           <div className="flex gap-2">
                             <button onClick={() => setEditandoActivo({...item, tipo: item.tipo || 'billetera'})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-10 h-10 rounded-xl transition-colors"><i className="fa-solid fa-pen"></i></button>
                             <button onClick={() => {
-                                const log = generarLog('Eliminó Billetera/Activo', `Eliminó "${item.nombre}" (${item.monto} ${item.moneda}).`, item);
+                                const log = generarLog('Eliminó Billetera/Activo', `Eliminó "${item.nombre}".`, item);
                                 guardarEnNube({...db, activos: db.activos.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                             }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors"><i className="fa-solid fa-trash"></i></button>
                           </div>
@@ -889,7 +990,6 @@
                               </div>
                             </div>
                           </div>
-
                           {pagoActivo.idGasto === item.id ? (
                             <div className="bg-slate-900 p-3 rounded-xl border border-amber-500/50 flex flex-col gap-2 fade-in">
                               <select value={pagoActivo.walletId} onChange={e => setPagoActivo({...pagoActivo, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white">
@@ -904,9 +1004,7 @@
                           ) : (
                             <div className="flex justify-end gap-2 border-t border-slate-800/50 pt-2 mt-1">
                               {(!item.cuotasTotales || item.cuotasPagadas < item.cuotasTotales) && (
-                                <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-2 rounded-xl text-xs font-bold transition">
-                                  Pagar
-                                </button>
+                                <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-2 rounded-xl text-xs font-bold transition">Pagar</button>
                               )}
                             </div>
                           )}
@@ -919,7 +1017,7 @@
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
                     <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
                       <h3 className="text-lg font-bold text-white"><i className="fa-solid fa-cart-shopping text-indigo-400 mr-2"></i>Gastos Sueltos</h3>
-                      {opcionesConcepto.length > 0 && <button onClick={limpiarHistoriaConceptos} className="text-slate-600 hover:text-indigo-400 bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
+                      {opcionesConcepto.length > 0 && <button onClick={limpiarHistoriaConceptos} title="Limpiar categorías" className="text-slate-600 hover:text-indigo-400 bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
                     </div>
                     <form onSubmit={agregarGastoPuntual} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                       <div className="flex gap-2">
@@ -930,7 +1028,7 @@
                           }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-sm">
                             <option value="">-- Buscar categoría --</option>
                             {opcionesConcepto.map(op => <option key={op} value={op}>{op}</option>)}
-                            <option value="OTRO" className="font-bold text-indigo-400">➕ Crear nueva categoría...</option>
+                            <option value="OTRO" className="font-bold text-indigo-400">➕ Crear nueva...</option>
                           </select>
                         ) : (
                           <div className="w-full flex gap-2 fade-in">
@@ -1013,19 +1111,19 @@
                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl transition text-base">Registrar y Sumar a "Por Cobrar"</button>
                   </form>
                   <div className="space-y-4 pt-4">
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico (Agrupado por día)</h4>
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-2 mb-4">Registro Histórico (Agrupado)</h4>
                     {(db.ventas || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.ventas || []).map(item => (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 hover:border-slate-700 transition">
                         <div>
                           <p className="font-black text-white text-lg">{item.fecha}</p>
-                          <p className="text-xs text-slate-500 mt-1">Total de equipos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
+                          <p className="text-xs text-slate-500 mt-1">Vendidos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
-                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Total acumulado del día</p>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Total de ese día</p>
                             <span className="font-mono font-black text-emerald-500 text-2xl">+{formatDinero(convertirParaMostrar(item.totalComision, item.moneda))}</span>
                           </div>
-                          <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors" title="Borrar toda la venta del día"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-10 h-10 rounded-xl transition-colors"><i className="fa-solid fa-trash"></i></button>
                         </div>
                       </div>
                     ))}
@@ -1050,18 +1148,16 @@
                     <div className="border-b border-slate-800 pb-3 mb-5">
                       <h3 className="text-lg font-bold text-white">Ingresar Equipo</h3>
                     </div>
-
                     <form onSubmit={agregarReparacion} className="space-y-4">
                       <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex">
                          <button type="button" onClick={() => setNuevaReparacion({...nuevaReparacion, origen: 'cliente'})} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${nuevaReparacion.origen === 'cliente' ? 'bg-cyan-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Cliente Particular</button>
                          <button type="button" onClick={() => setNuevaReparacion({...nuevaReparacion, origen: 'gremio'})} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${nuevaReparacion.origen === 'gremio' ? 'bg-cyan-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Mayorista / Gremio</button>
                       </div>
-
                       <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
                           {nuevaReparacion.origen === 'cliente' ? (
                               <>
                                 <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Nombre del Cliente</label><input type="text" required value={nuevaReparacion.clienteNombre} onChange={e => setNuevaReparacion({...nuevaReparacion, clienteNombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs" /></div>
-                                <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Teléfono (10 números exactos)</label><input type="text" maxLength="10" required placeholder="Ej: 3412345678" value={nuevaReparacion.clienteTelefono} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, clienteTelefono: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs font-mono" /></div>
+                                <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Teléfono (10 números)</label><input type="text" maxLength="10" required placeholder="Ej: 3412345678" value={nuevaReparacion.clienteTelefono} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, clienteTelefono: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 text-xs font-mono" /></div>
                               </>
                           ) : (
                               <div>
@@ -1083,14 +1179,12 @@
                                   )}
                               </div>
                           )}
-
                           <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800">
                               <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Modelo de iPhone</label><input type="text" required placeholder="Ej: iPhone 13 Pro" value={nuevaReparacion.modelo} onChange={e => setNuevaReparacion({...nuevaReparacion, modelo: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs" /></div>
-                              <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI (15 núm. exactos)</label><input type="text" maxLength="15" required placeholder="15 dígitos" value={nuevaReparacion.imei} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, imei: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-[10px]" /></div>
+                              <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI (15 núm.)</label><input type="text" maxLength="15" required placeholder="15 dígitos" value={nuevaReparacion.imei} onChange={e => {const val = e.target.value.replace(/\D/g, ''); setNuevaReparacion({...nuevaReparacion, imei: val});}} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-[10px]" /></div>
                           </div>
                           <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Estado Visual / Observaciones</label><textarea required rows="2" placeholder="(Ej: Pantalla rota)" value={nuevaReparacion.estadoVisual} onChange={e => setNuevaReparacion({...nuevaReparacion, estadoVisual: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs resize-none"></textarea></div>
                           <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Falla Declarada</label><input type="text" required placeholder="¿Qué hay que hacerle?" value={nuevaReparacion.falla} onChange={e => setNuevaReparacion({...nuevaReparacion, falla: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs" /></div>
-
                           {nuevaReparacion.origen === 'cliente' && (
                               <div>
                                   <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Presupuesto Estimado</label>
@@ -1104,7 +1198,6 @@
                       <button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-xl transition shadow-lg">Ingresar Equipo</button>
                     </form>
                   </div>
-
                   <div className="lg:col-span-2 space-y-4">
                       {(db.taller || []).length === 0 ? (
                           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-10 text-center"><i className="fa-solid fa-box-open text-6xl text-slate-700 mb-4"></i><h3 className="text-xl font-bold text-slate-400">Taller Vacío</h3></div>
@@ -1149,14 +1242,13 @@
                 <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center">
                   <p className="text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><i className="fa-solid fa-clipboard-check mr-2"></i>Mi Ganancia Taller (50%)</p>
                   <h2 className="text-5xl font-black text-white">{formatDinero(convertirParaMostrar(tGanNetRepUSD, 'USD'))}</h2>
-                  <p className="text-slate-400 text-xs font-mono mt-3">Tu comisión neta + repuestos que invertiste de toda la historia.</p>
+                  <p className="text-slate-400 text-xs font-mono mt-3">Tu comisión neta + repuestos invertidos.</p>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                   <div className="border-b border-slate-800 pb-3 mb-4">
                     <h3 className="text-lg font-bold text-white">Finalizar Equipo (Dar de baja del taller)</h3>
                   </div>
-                  
                   <form onSubmit={procesarFinalizacionReparacion} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-4 shadow-inner">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
@@ -1171,11 +1263,10 @@
                                     setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
                                 }
                             }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm font-bold focus:outline-none focus:border-cyan-500">
-                                <option value="">-- Seleccionar Equipo del Taller --</option>
+                                <option value="">-- Seleccionar Equipo --</option>
                                 {(db.taller || []).map(t => <option key={t.id} value={t.id}>{t.modelo} - {t.origen === 'cliente' ? t.clienteNombre : t.gremio}</option>)}
                             </select>
                         </div>
-                        
                         <div>
                             <label className="text-xs text-amber-400 font-bold block mb-2">Repuesto Utilizado (Opcional - Resta del Stock)</label>
                             <select value={nuevaReparacionFinalizada.repuestoId || ''} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, repuestoId: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-amber-500">
@@ -1184,20 +1275,17 @@
                             </select>
                         </div>
                     </div>
-
                     <div>
                         <label className="text-xs text-slate-400 font-bold block mb-1">Precio Final a Cobrarle al Cliente / Gremio</label>
                         <div className="flex">
                             <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-l-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-cyan-500 text-lg" />
                             <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
-                                const nuevaMoneda = e.target.value;
-                                const monedaActual = nuevaReparacionFinalizada.monedaCobro;
-                                let nuevoMonto = nuevaReparacionFinalizada.montoCobrado;
-                                if(nuevoMonto) {
-                                    if(nuevaMoneda === 'ARS' && monedaActual === 'USD') nuevoMonto = Math.round(parseFloat(nuevoMonto) * db.cotizacionDolar);
-                                    if(nuevaMoneda === 'USD' && monedaActual === 'ARS') nuevoMonto = redondear(parseFloat(nuevoMonto) / db.cotizacionDolar);
+                                const nvaMon = e.target.value; const monAct = nuevaReparacionFinalizada.monedaCobro; let nMonto = nuevaReparacionFinalizada.montoCobrado;
+                                if(nMonto) {
+                                    if(nvaMon === 'ARS' && monAct === 'USD') nMonto = Math.round(parseFloat(nMonto) * db.cotizacionDolar);
+                                    if(nvaMon === 'USD' && monAct === 'ARS') nMonto = redondear(parseFloat(nMonto) / db.cotizacionDolar);
                                 }
-                                setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: nuevaMoneda, montoCobrado: nuevoMonto});
+                                setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: nvaMon, montoCobrado: nMonto});
                             }} className="bg-slate-900 border border-slate-700 rounded-r-xl px-4 py-3 text-white font-bold focus:outline-none focus:border-cyan-500 border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
                         </div>
                     </div>
@@ -1205,7 +1293,7 @@
                   </form>
                 </div>
 
-                {/* FILTROS AVANZADOS */}
+                {/* PANEL DE FILTROS AVANZADOS */}
                 <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 shadow-xl">
                     <h3 className="text-base font-bold text-white mb-4 border-b border-slate-800 pb-2"><i className="fa-solid fa-filter text-cyan-400 mr-2"></i>Buscador de Reparaciones</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1225,22 +1313,16 @@
                             <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">IMEI</label>
                             <input type="text" placeholder="Últimos dígitos" value={filtroRep.imei} onChange={e => setFiltroRep({...filtroRep, imei: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-cyan-500" />
                         </div>
-                        
                         <div>
                             <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Origen</label>
                             <select value={filtroRep.origen} onChange={e => setFiltroRep({...filtroRep, origen: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-xs focus:outline-none focus:border-cyan-500">
-                                <option value="">Todos</option>
-                                <option value="cliente">Cliente Particular</option>
-                                <option value="gremio">Gremio / Mayorista</option>
+                                <option value="">Todos</option><option value="cliente">Cliente Particular</option><option value="gremio">Gremio / Mayorista</option>
                             </select>
                         </div>
                         <div>
                             <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Estado del Pago</label>
                             <select value={filtroRep.estadoCobro} onChange={e => setFiltroRep({...filtroRep, estadoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white text-xs focus:outline-none focus:border-cyan-500">
-                                <option value="">Todos</option>
-                                <option value="cobrado">Cobrado Total</option>
-                                <option value="pendiente">Pendiente (Cliente)</option>
-                                <option value="enviado_cobrar">En Cuentas a Cobrar (Gremio)</option>
+                                <option value="">Todos</option><option value="cobrado">Cobrado Total</option><option value="pendiente">Pendiente (Cliente)</option><option value="enviado_cobrar">En Cuentas a Cobrar (Gremio)</option>
                             </select>
                         </div>
                         <div>
@@ -1270,12 +1352,11 @@
 
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                   <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-3 mb-5">
-                      Historial de Reparaciones Finalizadas <span className="text-xs bg-slate-800 px-2 py-1 rounded-lg ml-2">{reparacionesFiltradas.length} resultados</span>
+                      Historial de Reparaciones <span className="text-xs bg-slate-800 px-2 py-1 rounded-lg ml-2">{reparacionesFiltradas.length} resultados</span>
                   </h4>
                   <div className="space-y-4">
-                    {reparacionesFiltradas.length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay resultados para estos filtros.</p> : reparacionesFiltradas.map(item => {
+                    {reparacionesFiltradas.length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay resultados.</p> : reparacionesFiltradas.map(item => {
                         const esPendiente = item.estadoCobro === 'pendiente';
-                        const adeudadoV = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
                         const mCobradoUSD = parseFloat(item.montoCobrado) || 0;
                         const cRepUSD = parseFloat(item.costoRepuestoUSD) || 0;
                         const gNetaUSD = Math.max(0, mCobradoUSD - cRepUSD);
@@ -1289,9 +1370,7 @@
                                   <span className="bg-slate-800 text-slate-400 px-2 py-0.5 rounded text-[10px] font-mono">IMEI: {item.equipoOriginal.imei}</span>
                               </div>
                               <p className="text-xs text-slate-400 mt-1">Reparación: <strong className="text-slate-300">{item.equipoOriginal.falla}</strong></p>
-                              {item.repuestoUsado && (
-                                  <p className="text-xs text-amber-400 mt-1"><i className="fa-solid fa-box mr-1"></i> Repuesto: {item.repuestoUsado} (Costo: {formatDinero(convertirParaMostrar(item.costoRepuestoUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)})</p>
-                              )}
+                              {item.repuestoUsado && <p className="text-xs text-amber-400 mt-1"><i className="fa-solid fa-box mr-1"></i> Repuesto: {item.repuestoUsado} (Costo: {formatDinero(convertirParaMostrar(item.costoRepuestoUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)})</p>}
                               <p className="text-xs text-slate-500 mt-1">Cliente: {item.equipoOriginal.origen === 'cliente' ? item.equipoOriginal.clienteNombre : item.equipoOriginal.gremio} • Fin: {item.fecha}</p>
                               
                               <div className="mt-3 flex gap-2 items-center flex-wrap">
@@ -1302,6 +1381,7 @@
                                   ) : (
                                       <span className="bg-emerald-950 border border-emerald-800 text-emerald-400 px-3 py-1 rounded text-xs font-bold"><i className="fa-solid fa-check mr-1"></i> COBRADO</span>
                                   )}
+
                                   {item.metodosPago && item.metodosPago.length > 0 && (
                                       <span className="text-[10px] text-slate-500 border border-slate-700 px-2 py-1 rounded">Vía: {item.metodosPago.join(', ')}</span>
                                   )}
@@ -1342,8 +1422,7 @@
                                     <div className="flex gap-2">
                                       <input type="number" step="any" placeholder="Ej: 50000" value={panelCobroReparacion.montoCobro} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, montoCobro: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white font-mono" />
                                       <select value={panelCobroReparacion.monedaPago} onChange={e => setPanelCobroReparacion({...panelCobroReparacion, monedaPago: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
-                                        <option value="ARS">ARS</option>
-                                        <option value="USD">USD</option>
+                                        <option value="ARS">ARS</option><option value="USD">USD</option>
                                       </select>
                                     </div>
                                     
@@ -1362,14 +1441,12 @@
                                             <button type="button" onClick={() => {setMostrarInputMetodoLibre(false); setPanelCobroReparacion({...panelCobroReparacion, metodoPago: ''});}} className="bg-slate-800 text-white px-4 py-2 rounded-lg">X</button>
                                         </div>
                                     )}
-
                                     <div className="flex gap-2 mt-2 border-t border-slate-800 pt-3">
                                       <button onClick={(e) => cobrarReparacionClienteParcial(e, item)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">Confirmar Pago</button>
                                       <button onClick={() => { setPanelCobroReparacion({idReparacion: null, metodoPago: '', montoCobro: '', monedaPago: 'ARS'}); setMostrarInputMetodoLibre(false); }} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-700">Cerrar</button>
                                     </div>
                                   </div>
                               )}
-
                               {!esPendiente && (
                                   <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-3 py-2 rounded-lg transition-colors text-xs"><i className="fa-solid fa-trash"></i> Borrar Registro</button>
                               )}
@@ -1382,7 +1459,7 @@
               </div>
             )}
 
-            {/* VISTA 6: DEUDAS A OTROS */}
+            {/* VISTA 5: DEUDAS A OTROS */}
             {vista === 'deudas' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-rose-900/40 to-slate-900 border border-rose-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1395,7 +1472,7 @@
                   </div>
                   <form onSubmit={agregarDeuda} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                     <div className="flex gap-2">
-                        <input type="text" required placeholder="Acreedor (Ej: Banco)" value={nuevaDeuda.acreedor} onChange={e => setNuevaDeuda({...nuevaDeuda, acreedor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none" />
+                        <input type="text" required placeholder="Acreedor (Ej: Banco / Juan)" value={nuevaDeuda.acreedor} onChange={e => setNuevaDeuda({...nuevaDeuda, acreedor: e.target.value})} className="w-1/3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none" />
                         <input type="text" required placeholder="Motivo (Obligatorio)" value={nuevaDeuda.motivo} onChange={e => setNuevaDeuda({...nuevaDeuda, motivo: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none text-sm" />
                     </div>
                     <div className="flex gap-2">
@@ -1421,8 +1498,14 @@
                           <div className="bg-slate-900 p-4 rounded-xl border border-emerald-500/50 flex flex-col gap-3 fade-in">
                             <div className="flex gap-2">
                               <input type="number" step="any" placeholder="Billete Entregado" value={pagoDeudaActivo.montoAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, montoAbono: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
-                              <select value={pagoDeudaActivo.monedaAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, monedaAbono: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
-                              <select value={pagoDeudaActivo.walletId} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white"><option value="">¿De qué billetera sale?</option>{billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select>
+                              <select value={pagoDeudaActivo.monedaAbono} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, monedaAbono: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
+                                <option value="ARS">ARS</option>
+                                <option value="USD">USD</option>
+                              </select>
+                              <select value={pagoDeudaActivo.walletId} onChange={e => setPagoDeudaActivo({...pagoDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
+                                <option value="">¿De qué billetera sale?</option>
+                                {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                              </select>
                             </div>
                             <div className="flex gap-2">
                               <button onClick={() => procesarPagoDeudaLibre(item)} className="flex-1 bg-emerald-600 text-white font-bold py-2 rounded-lg">Confirmar Pago</button>
@@ -1448,7 +1531,7 @@
               </div>
             )}
 
-            {/* VISTA 7: DEUDAS A COBRAR */}
+            {/* VISTA 6: DEUDAS A COBRAR */}
             {vista === 'cobrar' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1470,7 +1553,7 @@
                     </div>
                     <div className="flex gap-2">
                       <select required value={nuevaDeudaCobrar.walletId} onChange={e => setNuevaDeudaCobrar({...nuevaDeudaCobrar, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-white text-xs font-bold focus:outline-none">
-                        <option value="">¿De qué billetera prestaste la plata?</option>
+                        <option value="">¿De qué billetera le prestaste la plata?</option>
                         {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} (Disp: {a.monto} {a.moneda})</option>)}
                       </select>
                       <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition">Prestar Plata</button>
@@ -1480,6 +1563,7 @@
                     {(db.deudasCobrar || []).length === 0 ? <p className="text-center text-slate-500 py-6 text-sm font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay cuentas por cobrar.</p> : db.deudasCobrar.map(item => {
                       const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(item.id);
                       const colorDias = diasPasados > 30 ? 'text-rose-400' : 'text-emerald-400';
+                      
                       return (
                       <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-md hover:border-slate-700 transition">
                         <div className="flex justify-between items-start">
@@ -1498,7 +1582,8 @@
                             <div className="flex gap-2">
                               <input type="number" step="any" placeholder="Billete Entregado" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
                               <select value={cobroDeudaActivo.monedaCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, monedaCobro: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white font-bold">
-                                <option value="ARS">ARS</option><option value="USD">USD</option>
+                                <option value="ARS">ARS</option>
+                                <option value="USD">USD</option>
                               </select>
                               <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-white">
                                 <option value="">¿A qué billetera entró la plata?</option>
@@ -1516,7 +1601,7 @@
                               <button onClick={() => setEditandoDeudaCobrar({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-3 py-1.5 rounded-lg text-xs transition"><i className="fa-solid fa-trash"></i></button>
                             </div>
-                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: '', monedaCobro: monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar</button>
+                            <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: '', monedaCobro: monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-4 py-2 rounded-xl text-xs font-bold transition">Cobrar / Abonar</button>
                           </div>
                         )}
                       </div>
@@ -1526,7 +1611,7 @@
               </div>
             )}
 
-            {/* VISTA 8: STOCK */}
+            {/* VISTA 7: STOCK */}
             {vista === 'stock' && (
               <div className="max-w-4xl mx-auto space-y-8 pb-20 fade-in">
                 <div className="bg-gradient-to-br from-amber-900/40 to-slate-900 border border-amber-500/30 rounded-3xl p-8 shadow-xl text-center">
@@ -1538,6 +1623,7 @@
                     <h3 className="text-lg font-bold text-white">Ingresar Repuestos</h3>
                     {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} className="text-slate-600 hover:text-amber-400 transition-colors bg-slate-950 p-2 rounded-lg border border-slate-800"><i className="fa-solid fa-eraser text-xs"></i></button>}
                   </div>
+                  
                   <form onSubmit={agregarStock} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 shadow-inner">
                     <div className="flex gap-2">
                       {!mostrarInputStockLibre ? (
@@ -1581,7 +1667,7 @@
                         <div className="flex items-center gap-2 shrink-0">
                           <button onClick={() => setEditandoStock({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-9 h-9 rounded-lg transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
                           <button onClick={() => {
-                              const log = generarLog('Eliminó Repuesto', `Eliminó "${item.concepto}".`, item);
+                              const log = generarLog('Eliminó Repuesto', `Eliminó el repuesto "${item.concepto}" entero del sistema.`, item);
                               guardarEnNube({...db, stock: db.stock.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                           }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-9 h-9 rounded-lg transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
                         </div>
@@ -1657,9 +1743,7 @@
             )}
           </main>
           
-          {/* ============================================== */}
-          {/* MODALES DE EDICIÓN FLOTANTES                 */}
-          {/* ============================================== */}
+          {/* MODALES DE EDICIÓN FLOTANTES */}
           {modalRegistroActividad && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 fade-in">
               <div className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
@@ -1715,7 +1799,7 @@
               }} className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-sm w-full space-y-5 shadow-2xl">
                 <h3 className="font-black text-white text-xl border-b border-slate-800 pb-3">Editar Gasto Fijo</h3>
                 <div className="space-y-3">
-                  <div><label className="text-xs text-slate-400 font-bold mb-1 block">Concepto</label><input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" /></div>
+                  <div><label className="text-xs text-slate-400 font-bold mb-1 block">Concepto (Ej: Gimnasio)</label><input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white" /></div>
                   <div>
                     <label className="text-xs text-slate-400 font-bold mb-1 block">Precio Original de la Cuota</label>
                     <div className="flex gap-2">
