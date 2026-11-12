@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Patrimonio Cloud - Bruno</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -11,13 +11,23 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    /* AUTO-AJUSTE PROPORCIONAL SEGÚN PANTALLA (Celular, Notebook 19", Monitor 27") */
-    html { font-size: 12px; }
+    /* AUTO-AJUSTE PROPORCIONAL: Compacto en Celu, un puntito más grande en Notebook y Monitor */
+    html { font-size: 12px; height: 100%; height: 100dvh; }
     @media (min-width: 390px) { html { font-size: 12.5px; } }
-    @media (min-width: 768px) { html { font-size: 12.5px; } }
-    @media (min-width: 1024px) { html { font-size: 13px; } }
-    @media (min-width: 1440px) { html { font-size: 14px; } }
-    @media (min-width: 1920px) { html { font-size: 15.5px; } }
+    @media (min-width: 768px) { html { font-size: 13.5px; } }
+    @media (min-width: 1024px) { html { font-size: 14.5px; } }
+    @media (min-width: 1366px) { html { font-size: 15px; } }
+    @media (min-width: 1536px) { html { font-size: 15.5px; } }
+    @media (min-width: 1920px) { html { font-size: 16.5px; } }
+
+    body { height: 100%; height: 100dvh; overflow: hidden; }
+    .altura-dinamica { height: 100vh; height: 100dvh; }
+    
+    /* Colchón inferior extra en celulares para que la barra del navegador nunca tape lo último */
+    .espacio-inferior-seguro { padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 24px)); }
+    @media (min-width: 768px) {
+      .espacio-inferior-seguro { padding-bottom: 3.5rem; }
+    }
 
     .hide-scrollbar::-webkit-scrollbar { display: none; }
     .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -25,7 +35,7 @@
     @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 font-sans antialiased h-screen overflow-hidden text-sm selection:bg-blue-500/30">
+<body class="bg-slate-950 text-slate-100 font-sans antialiased text-sm selection:bg-blue-500/30">
   <div id="root"></div>
 
   <script type="text/babel">
@@ -37,7 +47,7 @@
       render() {
         if (this.state.hasError) {
           return (
-            <div className="flex h-screen items-center justify-center p-4">
+            <div className="flex altura-dinamica items-center justify-center p-4">
               <div className="bg-rose-950 border border-rose-500 p-5 rounded-xl text-center max-w-sm w-full">
                 <h1 className="text-white font-bold mb-2">Error Visual</h1>
                 <p className="text-rose-300 text-xs mb-4">{this.state.errorInfo}</p>
@@ -767,11 +777,11 @@
       // ==========================================
       // UI RENDER 
       // ==========================================
-      if (!isLoaded) return <div className="flex h-screen items-center justify-center font-bold text-blue-400 animate-pulse text-lg">Conectando a tu Nube...</div>;
+      if (!isLoaded) return <div className="flex altura-dinamica items-center justify-center font-bold text-blue-400 animate-pulse text-lg">Conectando a tu Nube...</div>;
       
       if (!sesion) {
         return (
-          <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4 w-full">
+          <div className="flex items-center justify-center altura-dinamica bg-slate-950 p-4 w-full">
             <form onSubmit={login} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-xs w-full space-y-5 shadow-2xl fade-in">
               <div className="text-center space-y-1.5">
                 <i className="fa-solid fa-fingerprint text-4xl text-blue-500 mb-2"></i>
@@ -788,7 +798,7 @@
 
       if (bloqueoCotizacion) {
           return (
-            <div className="flex items-center justify-center min-h-screen bg-slate-950 p-4 w-full">
+            <div className="flex items-center justify-center altura-dinamica bg-slate-950 p-4 w-full">
               <form onSubmit={procesarBloqueoCotizacion} className="bg-slate-900 border border-indigo-500/50 rounded-2xl p-6 max-w-xs w-full space-y-5 shadow-2xl fade-in text-center">
                 <div className="space-y-1.5">
                   <i className="fa-solid fa-calendar-day text-4xl text-emerald-400 mb-1"></i>
@@ -806,12 +816,12 @@
       }
 
       return (
-        <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans text-sm w-full">
+        <div className="flex altura-dinamica bg-slate-950 text-slate-100 overflow-hidden font-sans text-sm w-full">
           
           {menuAbierto && <div className="md:hidden fixed inset-0 bg-slate-950/80 z-40 backdrop-blur-xs" onClick={() => setMenuAbierto(false)}></div>}
 
           {/* BARRA LATERAL COMPACTA Y AUTO-AJUSTABLE */}
-          <aside className={`fixed md:static inset-y-0 left-0 z-50 w-56 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 transform transition-transform duration-200 ease-in-out ${menuAbierto ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
+          <aside className={`fixed md:static inset-y-0 left-0 z-50 w-56 altura-dinamica bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 transform transition-transform duration-200 ease-in-out ${menuAbierto ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
             <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white text-sm shadow-md"><i className="fa-solid fa-bolt"></i></div>
@@ -844,7 +854,7 @@
               </div>
             </nav>
 
-            <div className="p-3 border-t border-slate-800 text-center">
+            <div className="p-3 pb-6 md:pb-3 border-t border-slate-800 text-center shrink-0">
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5">
                 <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Cotización Dólar</p>
                 {!editandoDolar ? (
@@ -868,7 +878,7 @@
           </aside>
 
           {/* CONTENEDOR PRINCIPAL */}
-          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-w-0 altura-dinamica overflow-hidden">
             
             {/* BARRA SUPERIOR INTEGRADA (Móvil y Escritorio) */}
             <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-2.5 flex justify-between items-center z-30 shrink-0">
@@ -890,12 +900,12 @@
                </div>
             </header>
 
-            {/* ÁREA SCROLLEABLE (VISTAS COMPACTAS) */}
-            <main className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 relative fade-in hide-scrollbar">
+            {/* ÁREA SCROLLEABLE CON COLCHÓN INFERIOR SEGURO EN CELULARES */}
+            <main className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 EspacioScroll relative fade-in hide-scrollbar espacio-inferior-seguro">
 
               {/* VISTA 1: PATRIMONIO */}
               {vista === 'patrimonio' && (
-                <div className="max-w-5xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
                   <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                     <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-2xl p-4 shadow-lg">
                       <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-scale-balanced mr-1.5"></i>Patrimonio Neto</p>
@@ -998,7 +1008,7 @@
 
               {/* VISTA 2: GASTOS Y ANÁLISIS */}
               {vista === 'gastos' && (
-                <div className="max-w-5xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-calendar-days mr-1.5"></i>Carga Fija Mensual</p>
@@ -1149,7 +1159,7 @@
 
               {/* VISTA 3: VENTAS Y COMISIONES */}
               {vista === 'ventas' && (
-                <div className="max-w-4xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-4xl mx-auto space-y-5 fade-in">
                   <div className="grid grid-cols-3 gap-3">
                     <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
                       <p className="text-[9px] sm:text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-calendar-week mr-1"></i>Semana</p>
@@ -1209,7 +1219,7 @@
 
               {/* VISTA 4: TALLER INGRESOS */}
               {vista === 'taller' && (
-                <div className="max-w-5xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
                   <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-2xl p-4 sm:p-5 shadow-lg flex justify-between items-center">
                     <div>
                         <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-microchip mr-1.5"></i>Equipos en Taller</p>
@@ -1318,11 +1328,11 @@
 
               {/* VISTA 5: REPARACIONES FINALIZADAS Y FILTROS */}
               {vista === 'reparacionesFin' && (
-                <div className="max-w-5xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
                   <div className="bg-gradient-to-br from-cyan-900/40 to-slate-900 border border-cyan-500/30 rounded-2xl p-4 sm:p-5 shadow-lg text-center">
                     <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-clipboard-check mr-1.5"></i>Mi Ganancia Taller (50%)</p>
                     <h2 className="text-2xl sm:text-3xl font-black text-white">{formatDinero(convertirParaMostrar(tGanNetRepUSD, 'USD'))}</h2>
-                    <p className="text-slate-400 text-[10px] font-mono mt-1">Tu comisión neta + repuestos invertidos.</p>
+                    <p className="text-slate-400 text-[10px] font-mono mt-1">Tu comisión neta + repuestos que invertiste de toda la historia.</p>
                   </div>
 
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg">
@@ -1545,7 +1555,7 @@
 
               {/* VISTA 6: DEUDAS A OTROS */}
               {vista === 'deudas' && (
-                <div className="max-w-4xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-4xl mx-auto space-y-5 fade-in">
                   <div className="bg-gradient-to-br from-rose-900/40 to-slate-900 border border-rose-500/30 rounded-2xl p-4 sm:p-5 shadow-lg text-center">
                     <p className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-handshake mr-1.5"></i>Total Deudas a Otros</p>
                     <h2 className="text-2xl sm:text-3xl font-black text-white">{formatDinero(convertirParaMostrar(tDeudPenUSD, 'USD'))}</h2>
@@ -1614,7 +1624,7 @@
 
               {/* VISTA 7: DEUDAS A COBRAR */}
               {vista === 'cobrar' && (
-                <div className="max-w-4xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-4xl mx-auto space-y-5 fade-in">
                   <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 shadow-lg text-center">
                     <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-hand-holding-dollar mr-1.5"></i>Total a Cobrar</p>
                     <h2 className="text-2xl sm:text-3xl font-black text-white">{formatDinero(convertirParaMostrar(tDeudCobUSD, 'USD'))}</h2>
@@ -1694,7 +1704,7 @@
 
               {/* VISTA 8: STOCK */}
               {vista === 'stock' && (
-                <div className="max-w-4xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-4xl mx-auto space-y-5 fade-in">
                   <div className="bg-gradient-to-br from-amber-900/40 to-slate-900 border border-amber-500/30 rounded-2xl p-4 sm:p-5 shadow-lg text-center">
                     <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-boxes-stacked mr-1.5"></i>Capital Físico en Stock</p>
                     <h2 className="text-2xl sm:text-3xl font-black text-white">{formatDinero(convertirParaMostrar(tStkUSD, 'USD'))}</h2>
@@ -1761,7 +1771,7 @@
 
               {/* VISTA 9: AUDITORÍA */}
               {vista === 'actividad' && (
-                <div className="max-w-5xl mx-auto space-y-5 pb-16 fade-in">
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
                   <div className="bg-slate-900 border border-indigo-500/30 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col h-[280px]">
                     <h3 className="font-black text-white text-xs uppercase tracking-wider border-b border-slate-800 pb-2.5 mb-3 flex items-center gap-2"><i className="fa-solid fa-robot text-indigo-400"></i> Buscador Inteligente</h3>
                     <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3 hide-scrollbar">
