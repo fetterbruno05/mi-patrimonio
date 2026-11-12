@@ -72,8 +72,9 @@
         cotizacionDolar: 1500, fechaUltimaCotizacion: '',
         activos: [], gastosFijos: [], gastosPuntuales: [], 
         deudas: [], deudasCobrar: [], 
-        stock: [], ventas: [], taller: [], reparacionesFin: [],
-        historiaConceptos: [], historiaStock: [], historiaGremios: ['iConnecture'], historiaMetodosPago: ['Efectivo', 'Transferencia'],
+        stock: [], ventas: [], taller: [], reparacionesFin: [], rmaProveedores: [],
+        historiaConceptos: [], historiaStock: [], historiaGremios: ['iConnecture'], 
+        historiaMetodosPago: ['Efectivo', 'Transferencia'], historiaProveedores: ['Proveedor Principal'],
         actividad: [] 
     };
 
@@ -85,6 +86,7 @@
       ventas: 'Ventas de Equipos',
       taller: 'Taller Ingresos',
       reparacionesFin: 'Reparaciones Histórico',
+      garantias: 'Garantías y RMA',
       cobrar: 'Cuentas a Cobrar',
       deudas: 'Deudas a Otros',
       stock: 'Stock Repuestos',
@@ -113,15 +115,22 @@
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
       const [nuevaDeudaCobrar, setNuevaDeudaCobrar] = useState({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' }); 
-      const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
+      
+      const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD', proveedor: '' });
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
+      const [mostrarInputProveedorLibre, setMostrarInputProveedorLibre] = useState(false);
+
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
+      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: '90' });
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS', metodoPago: '' });
       const [mostrarInputMetodoLibre, setMostrarInputMetodoLibre] = useState(false);
+
+      // ESTADOS DE GARANTÍAS Y RMA
+      const [filtroGarantia, setFiltroGarantia] = useState({ busqueda: '', estado: 'todas' });
+      const [panelReclamoGarantia, setPanelReclamoGarantia] = useState({ idReparacion: null, motivoFalla: '', tipoSolucion: 'cambio_rma', repuestoReemplazoId: '' });
 
       const [filtroRep, setFiltroRep] = useState({ cliente: '', telefono: '', modelo: '', imei: '', origen: '', estadoCobro: '', metodoPago: '', desde: '', hasta: '' });
 
@@ -151,6 +160,7 @@
       const opcionesConcepto = useMemo(() => [...new Set(db.historiaConceptos || [])], [db.historiaConceptos]);
       const opcionesStock = useMemo(() => [...new Set(db.historiaStock || [])], [db.historiaStock]);
       const opcionesGremios = useMemo(() => [...new Set(db.historiaGremios || ['iConnecture'])], [db.historiaGremios]);
+      const opcionesProveedores = useMemo(() => [...new Set(db.historiaProveedores || ['Proveedor Principal'])], [db.historiaProveedores]);
       const billeterasDisponibles = useMemo(() => (db.activos || []).filter(a => a.tipo !== 'activo'), [db.activos]);
 
       useEffect(() => {
@@ -175,10 +185,12 @@
                 ventas: Array.isArray(data.payload.ventas) ? data.payload.ventas.filter(Boolean) : [],
                 taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [],
                 reparacionesFin: Array.isArray(data.payload.reparacionesFin) ? data.payload.reparacionesFin.filter(Boolean) : [], 
+                rmaProveedores: Array.isArray(data.payload.rmaProveedores) ? data.payload.rmaProveedores.filter(Boolean) : [],
                 historiaConceptos: Array.isArray(data.payload.historiaConceptos) ? data.payload.historiaConceptos : [],
                 historiaStock: Array.isArray(data.payload.historiaStock) ? data.payload.historiaStock : [],
                 historiaGremios: Array.isArray(data.payload.historiaGremios) ? data.payload.historiaGremios : ['iConnecture'],
                 historiaMetodosPago: Array.isArray(data.payload.historiaMetodosPago) ? data.payload.historiaMetodosPago : ['Efectivo', 'Transferencia'],
+                historiaProveedores: Array.isArray(data.payload.historiaProveedores) ? data.payload.historiaProveedores : ['Proveedor Principal'],
                 actividad: Array.isArray(data.payload.actividad) ? data.payload.actividad.filter(Boolean) : []
               };
               setDb(baseCargada);
@@ -240,6 +252,12 @@
           return Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)); 
       };
 
+      const esTextoBateria = (texto) => {
+          if (!texto) return false;
+          const t = texto.toLowerCase();
+          return t.includes('bateria') || t.includes('batería') || t.includes('bat ');
+      };
+
       const limpiarHistoriaConceptos = () => {
         if(window.confirm("¿Estás seguro de vaciar el historial de nombres de gastos?")) {
           const log = generarLog('Limpió Historial', 'Vació la memoria de conceptos de gastos.');
@@ -276,7 +294,7 @@
         else if (lower.includes('stock') || lower.includes('repuesto')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('stock') || l.accion.toLowerCase().includes('repuesto'));
         else if (lower.includes('activo') || lower.includes('billetera') || lower.includes('transferencia')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('billetera') || l.accion.toLowerCase().includes('activo') || l.accion.toLowerCase().includes('movimiento'));
         else if (lower.includes('venta') || lower.includes('comision')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('venta') || l.accion.toLowerCase().includes('comisi'));
-        else if (lower.includes('taller') || lower.includes('reparacion')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('taller') || l.accion.toLowerCase().includes('equipo'));
+        else if (lower.includes('taller') || lower.includes('reparacion') || lower.includes('garantia') || lower.includes('garantía')) logsMatch = logsMatch.filter(l => l.accion.toLowerCase().includes('taller') || l.accion.toLowerCase().includes('equipo') || l.accion.toLowerCase().includes('garant'));
 
         if (lower.includes('bruno')) logsMatch = logsMatch.filter(l => l.usuario.toLowerCase() === 'bruno');
 
@@ -504,24 +522,29 @@
       const agregarStock = (e) => {
         e.preventDefault();
         if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
+        if (!nuevoStock.proveedor) return alert('Seleccioná o escribí el proveedor del repuesto.');
         const conceptoTrim = nuevoStock.concepto.trim();
+        const proveedorTrim = nuevoStock.proveedor.trim();
         let stockAc = [...(db.stock || [])];
-        const idx = stockAc.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase());
+        const idx = stockAc.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase() && (s.proveedor || '').toLowerCase().trim() === proveedorTrim.toLowerCase());
         let log;
         if (idx !== -1) {
           stockAc[idx].cantidad = parseInt(stockAc[idx].cantidad) + parseInt(nuevoStock.cantidad);
           stockAc[idx].monto = parseFloat(nuevoStock.monto) || 0;
           stockAc[idx].moneda = nuevoStock.moneda;
-          log = generarLog('Aumentó Repuesto Existente', `Sumó ${nuevoStock.cantidad} unid. de "${stockAc[idx].concepto}".`, stockAc[idx]);
+          stockAc[idx].proveedor = proveedorTrim;
+          log = generarLog('Aumentó Repuesto Existente', `Sumó ${nuevoStock.cantidad} unid. de "${stockAc[idx].concepto}" (Prov: ${proveedorTrim}).`, stockAc[idx]);
         } else {
-          const item = { id: Date.now(), concepto: conceptoTrim, cantidad: parseInt(nuevoStock.cantidad) || 1, monto: parseFloat(nuevoStock.monto) || 0, moneda: nuevoStock.moneda };
+          const item = { id: Date.now(), concepto: conceptoTrim, cantidad: parseInt(nuevoStock.cantidad) || 1, monto: parseFloat(nuevoStock.monto) || 0, moneda: nuevoStock.moneda, proveedor: proveedorTrim };
           stockAc.unshift(item);
-          log = generarLog('Creó Nuevo Repuesto', `Ingresó ${item.cantidad} unid. de "${item.concepto}".`, item);
+          log = generarLog('Creó Nuevo Repuesto', `Ingresó ${item.cantidad} unid. de "${item.concepto}" (Prov: ${proveedorTrim}).`, item);
         }
         const historiaNueva = [...new Set([conceptoTrim, ...(db.historiaStock || [])])];
-        guardarEnNube({ ...db, stock: stockAc, historiaStock: historiaNueva, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setNuevoStock({ concepto: '', cantidad: '1', monto: '', moneda: 'USD' });
+        const historiaProvNueva = [...new Set([proveedorTrim, ...(db.historiaProveedores || ['Proveedor Principal'])])];
+        guardarEnNube({ ...db, stock: stockAc, historiaStock: historiaNueva, historiaProveedores: historiaProvNueva, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setNuevoStock({ concepto: '', cantidad: '1', monto: '', moneda: 'USD', proveedor: proveedorTrim });
         setMostrarInputStockLibre(false);
+        setMostrarInputProveedorLibre(false);
       };
 
       const modificarCantidadStock = (id, delta) => {
@@ -612,18 +635,22 @@
           const montoFin = parseFloat(nuevaReparacionFinalizada.montoCobrado);
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
           let stockAc = db.stock || [];
-          let costoRepUSD = 0; let nomRep = null;
+          let costoRepUSD = 0; let nomRep = null; let provRep = null;
           if (nuevaReparacionFinalizada.repuestoId) {
               const rep = stockAc.find(s => s.id === parseInt(nuevaReparacionFinalizada.repuestoId));
               if (!rep || rep.cantidad < 1) return alert('Sin stock del repuesto.');
               costoRepUSD = aUSDBase(rep.monto, rep.moneda, db.cotizacionDolar);
               nomRep = rep.concepto;
+              provRep = rep.proveedor || 'No especificado';
               stockAc = stockAc.map(s => s.id === rep.id ? { ...s, cantidad: s.cantidad - 1 } : s);
           }
           const mUSD = aUSDBase(montoFin, nuevaReparacionFinalizada.monedaCobro, db.cotizacionDolar);
+          const diasG = parseInt(nuevaReparacionFinalizada.diasGarantia !== undefined ? nuevaReparacionFinalizada.diasGarantia : 90);
+
           const regFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), equipoOriginal: equipo, 
-              repuestoUsado: nomRep, costoRepuestoUSD: costoRepUSD,
+              repuestoUsado: nomRep, repuestoProveedor: provRep, costoRepuestoUSD: costoRepUSD,
+              diasGarantia: diasG, historialGarantia: [],
               montoCobradoOriginal: montoFin, monedaCobroOriginal: nuevaReparacionFinalizada.monedaCobro,
               montoCobrado: mUSD, monedaCobro: 'USD', montoAdeudadoRestante: mUSD, 
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar', metodosPago: []
@@ -638,12 +665,12 @@
               if (idx !== -1) deudasCb[idx].monto = (parseFloat(deudasCb[idx].monto) + mUSD).toFixed(4);
               else deudasCb.unshift({ id: Date.now()+1, fechaTimestamp: Date.now(), deudor: equipo.gremio, motivo: "Acumulado de Reparaciones Gremio", monto: mUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString() });
               dbUpd.deudasCobrar = deudasCb;
-              log = generarLog('Finalizó Reparación Gremio', `Entregó ${equipo.modelo}. Sumó a Cobrar.`, regFin);
+              log = generarLog('Finalizó Reparación Gremio', `Entregó ${equipo.modelo} (${diasG}d gtía). Sumó a Cobrar.`, regFin);
           } else {
-              log = generarLog('Finalizó Reparación Cliente', `Entregó ${equipo.modelo} a ${equipo.clienteNombre}. Queda Pendiente.`, regFin);
+              log = generarLog('Finalizó Reparación Cliente', `Entregó ${equipo.modelo} a ${equipo.clienteNombre} (${diasG}d gtía). Queda Pendiente.`, regFin);
           }
           guardarEnNube({ ...db, ...dbUpd, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
+          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: '90' });
       };
 
       const cobrarReparacionClienteParcial = (e, item) => {
@@ -695,6 +722,86 @@
           }
       };
 
+      // --- HANDLERS DE GARANTÍAS Y RMA ---
+      const procesarReclamoGarantia = (e, itemRep) => {
+          e.preventDefault();
+          if (!panelReclamoGarantia.motivoFalla.trim()) return alert('Ingresá el motivo de la falla o reclamo.');
+
+          let stockAc = [...(db.stock || [])];
+          let rmaAc = [...(db.rmaProveedores || [])];
+          let detalleSolucion = 'Ajuste en taller (Sin cambio de pieza)';
+
+          if (panelReclamoGarantia.tipoSolucion === 'cambio_rma') {
+              if (!panelReclamoGarantia.repuestoReemplazoId) return alert('Seleccioná qué repuesto nuevo vas a descontar del stock para hacer el cambio.');
+              const repNuevo = stockAc.find(s => s.id === parseInt(panelReclamoGarantia.repuestoReemplazoId));
+              if (!repNuevo || repNuevo.cantidad < 1) return alert('No hay stock disponible del repuesto seleccionado.');
+
+              // 1. Descontamos 1 unidad del repuesto nuevo que usamos hoy
+              stockAc = stockAc.map(s => s.id === repNuevo.id ? { ...s, cantidad: s.cantidad - 1 } : s);
+
+              // 2. Mandamos el repuesto fallado a la lista de RMA para reclamar al proveedor
+              const nombreFallado = itemRep.repuestoUsado || repNuevo.concepto;
+              const proveedorFallado = itemRep.repuestoProveedor || repNuevo.proveedor || 'No especificado';
+
+              const nuevoItemRMA = {
+                  id: Date.now(),
+                  fecha: new Date().toLocaleDateString(),
+                  fechaTimestamp: Date.now(),
+                  repuesto: nombreFallado,
+                  proveedor: proveedorFallado,
+                  modeloEquipo: itemRep.equipoOriginal.modelo,
+                  imeiEquipo: itemRep.equipoOriginal.imei,
+                  cliente: itemRep.equipoOriginal.origen === 'cliente' ? itemRep.equipoOriginal.clienteNombre : itemRep.equipoOriginal.gremio,
+                  motivoFalla: panelReclamoGarantia.motivoFalla.trim(),
+                  repuestoStockIdReferencia: repNuevo.id
+              };
+              rmaAc.unshift(nuevoItemRMA);
+              detalleSolucion = `Cambio de pieza (${repNuevo.concepto}) -> Enviado a RMA Proveedor (${proveedorFallado})`;
+          }
+
+          const nuevoEventoGarantia = {
+              id: Date.now() + 1,
+              fecha: new Date().toLocaleDateString(),
+              motivo: panelReclamoGarantia.motivoFalla.trim(),
+              solucion: detalleSolucion
+          };
+
+          const repsActualizadas = (db.reparacionesFin || []).map(r => {
+              if (r.id === itemRep.id) {
+                  return { ...r, historialGarantia: [nuevoEventoGarantia, ...(r.historialGarantia || [])] };
+              }
+              return r;
+          });
+
+          const log = generarLog('Registró Garantía / RMA', `Equipo ${itemRep.equipoOriginal.modelo} (IMEI: ${itemRep.equipoOriginal.imei}). Motivo: ${panelReclamoGarantia.motivoFalla}. Solución: ${detalleSolucion}`);
+          guardarEnNube({ ...db, stock: stockAc, rmaProveedores: rmaAc, reparacionesFin: repsActualizadas, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          setPanelReclamoGarantia({ idReparacion: null, motivoFalla: '', tipoSolucion: 'cambio_rma', repuestoReemplazoId: '' });
+      };
+
+      const resolverRMAProveedor = (itemRMA, reponerAlStock) => {
+          let stockAc = [...(db.stock || [])];
+          let msgLog = '';
+
+          if (reponerAlStock) {
+              const idx = stockAc.findIndex(s => s.id === itemRMA.repuestoStockIdReferencia || (s.concepto.toLowerCase() === itemRMA.repuesto.toLowerCase() && (s.proveedor || '').toLowerCase() === itemRMA.proveedor.toLowerCase()));
+              if (idx !== -1) {
+                  stockAc[idx].cantidad = parseInt(stockAc[idx].cantidad) + 1;
+                  msgLog = `El proveedor "${itemRMA.proveedor}" repuso "${itemRMA.repuesto}". Se sumó +1 unidad al Stock.`;
+              } else {
+                  const nuevoItem = { id: Date.now(), concepto: itemRMA.repuesto, cantidad: 1, monto: 0, moneda: 'USD', proveedor: itemRMA.proveedor };
+                  stockAc.unshift(nuevoItem);
+                  msgLog = `El proveedor "${itemRMA.proveedor}" repuso "${itemRMA.repuesto}". Se creó en Stock con 1 unidad.`;
+              }
+          } else {
+              if (!window.confirm(`¿Cerrar reclamo de "${itemRMA.repuesto}" con el proveedor "${itemRMA.proveedor}" sin sumar stock?`)) return;
+              msgLog = `Se cerró el reclamo de RMA por "${itemRMA.repuesto}" (Proveedor: ${itemRMA.proveedor}) sin reposición física.`;
+          }
+
+          const rmaRestantes = (db.rmaProveedores || []).filter(r => r.id !== itemRMA.id);
+          const log = generarLog('Resolvió RMA Proveedor', msgLog, itemRMA);
+          guardarEnNube({ ...db, stock: stockAc, rmaProveedores: rmaRestantes, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+      };
+
       const reparacionesFiltradas = useMemo(() => {
           return (db.reparacionesFin || []).filter(item => {
               let ok = true; const eq = item.equipoOriginal;
@@ -713,6 +820,46 @@
               return ok;
           });
       }, [db.reparacionesFin, filtroRep]);
+
+      // CÁLCULO DE GARANTÍAS Y SEMÁFORO
+      const garantiasProcesadas = useMemo(() => {
+          return (db.reparacionesFin || []).map(item => {
+              const diasPasados = calcularDiasPasados(item.fechaTimestamp);
+              const esBat = esTextoBateria(item.equipoOriginal?.falla) || esTextoBateria(item.repuestoUsado);
+              const diasTotales = item.diasGarantia !== undefined ? parseInt(item.diasGarantia) : (esBat ? 180 : 90);
+              const diasRestantes = diasTotales - diasPasados;
+
+              let estadoSemaforo = 'vigente'; // verde (> 15 días)
+              if (diasTotales === 0 || diasRestantes <= 0) {
+                  estadoSemaforo = 'vencida'; // gris
+              } else if (diasRestantes <= 15) {
+                  estadoSemaforo = 'por_vencer'; // rojo (<= 15 días)
+              }
+
+              return {
+                  ...item,
+                  diasPasados,
+                  diasTotales,
+                  diasRestantes,
+                  esBateria: diasTotales === 180 || esBat,
+                  estadoSemaforo
+              };
+          }).filter(item => {
+              if (filtroGarantia.estado !== 'todas' && item.estadoSemaforo !== filtroGarantia.estado) return false;
+              if (filtroGarantia.busqueda.trim()) {
+                  const q = filtroGarantia.busqueda.toLowerCase().trim();
+                  const eq = item.equipoOriginal;
+                  const propietario = eq.origen === 'cliente' ? eq.clienteNombre : eq.gremio;
+                  const match = eq.imei.toLowerCase().includes(q) ||
+                                eq.modelo.toLowerCase().includes(q) ||
+                                propietario.toLowerCase().includes(q) ||
+                                (eq.clienteTelefono && eq.clienteTelefono.includes(q)) ||
+                                (item.repuestoUsado && item.repuestoUsado.toLowerCase().includes(q));
+                  if (!match) return false;
+              }
+              return true;
+          });
+      }, [db.reparacionesFin, filtroGarantia]);
 
       // CÁLCULOS GLOBALES
       const tBillUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -841,6 +988,10 @@
                 <button onClick={() => {setVista('ventas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'ventas' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-cash-register w-4 text-center"></i> Ventas de Equipos</button>
                 <button onClick={() => {setVista('taller'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'taller' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-microchip w-4 text-center"></i> Taller Ingresos</button>
                 <button onClick={() => {setVista('reparacionesFin'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'reparacionesFin' ? 'bg-cyan-700 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-clipboard-check w-4 text-center"></i> Reparaciones Histórico</button>
+                <button onClick={() => {setVista('garantias'); setMenuAbierto(false);}} className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'garantias' ? 'bg-teal-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                  <span className="flex items-center gap-2.5"><i className="fa-solid fa-shield-virus w-4 text-center"></i> Garantías y RMA</span>
+                  {(db.rmaProveedores || []).length > 0 && <span className="bg-amber-500 text-slate-950 font-black px-1.5 py-0.2 rounded-full text-[10px]">{(db.rmaProveedores || []).length}</span>}
+                </button>
               </div>
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-1">
@@ -880,7 +1031,7 @@
           {/* CONTENEDOR PRINCIPAL */}
           <div className="flex-1 flex flex-col min-w-0 altura-dinamica overflow-hidden">
             
-            {/* BARRA SUPERIOR INTEGRADA (Móvil y Escritorio) */}
+            {/* BARRA SUPERIOR INTEGRADA */}
             <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-2.5 flex justify-between items-center z-30 shrink-0">
                <div className="flex items-center gap-3 min-w-0">
                  <button onClick={() => setMenuAbierto(true)} className="md:hidden text-slate-300 hover:text-white text-lg focus:outline-none p-1">
@@ -900,8 +1051,8 @@
                </div>
             </header>
 
-            {/* ÁREA SCROLLEABLE CON COLCHÓN INFERIOR SEGURO EN CELULARES */}
-            <main className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 EspacioScroll relative fade-in hide-scrollbar espacio-inferior-seguro">
+            {/* ÁREA SCROLLEABLE */}
+            <main className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 relative fade-in hide-scrollbar espacio-inferior-seguro">
 
               {/* VISTA 1: PATRIMONIO */}
               {vista === 'patrimonio' && (
@@ -1340,30 +1491,49 @@
                       <h3 className="text-sm font-bold text-white">Finalizar Equipo (Dar de baja del taller)</h3>
                     </div>
                     <form onSubmit={procesarFinalizacionReparacion} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                      <div className="md:col-span-4">
+                      <div className="md:col-span-3">
                           <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Equipo Listo</label>
                           <select required value={nuevaReparacionFinalizada.idEquipoTaller} onChange={e => {
                               const idTaller = e.target.value;
-                              if (!idTaller) return setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
+                              if (!idTaller) return setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: '90' });
                               const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
+                              const autoGarantia = esTextoBateria(equipo?.falla) ? '180' : '90';
                               if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
-                                  setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS', repuestoId: '' });
+                                  setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS', repuestoId: '', diasGarantia: autoGarantia });
                               } else {
-                                  setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS', repuestoId: '' });
+                                  setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: autoGarantia });
                               }
                           }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-cyan-500">
                               <option value="">-- Seleccionar Equipo --</option>
                               {(db.taller || []).map(t => <option key={t.id} value={t.id}>{t.modelo} - {t.origen === 'cliente' ? t.clienteNombre : t.gremio}</option>)}
                           </select>
                       </div>
-                      <div className="md:col-span-4">
+                      <div className="md:col-span-3">
                           <label className="text-[10px] text-amber-400 font-bold uppercase block mb-1">Repuesto Usado (Opcional)</label>
-                          <select value={nuevaReparacionFinalizada.repuestoId || ''} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, repuestoId: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
+                          <select value={nuevaReparacionFinalizada.repuestoId || ''} onChange={e => {
+                              const repId = e.target.value;
+                              const repObj = (db.stock || []).find(s => s.id === parseInt(repId));
+                              const esBat = esTextoBateria(repObj?.concepto);
+                              setNuevaReparacionFinalizada({
+                                  ...nuevaReparacionFinalizada,
+                                  repuestoId: repId,
+                                  diasGarantia: esBat ? '180' : nuevaReparacionFinalizada.diasGarantia
+                              });
+                          }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
                               <option value="">-- Ninguno --</option>
-                              {(db.stock || []).filter(s => s.cantidad > 0).map(s => <option key={s.id} value={s.id}>{s.concepto} (Disp: {s.cantidad})</option>)}
+                              {(db.stock || []).filter(s => s.cantidad > 0).map(s => <option key={s.id} value={s.id}>{s.concepto} ({s.proveedor || 'S/P'} - Disp: {s.cantidad})</option>)}
                           </select>
                       </div>
-                      <div className="md:col-span-4">
+                      <div className="md:col-span-3">
+                          <label className="text-[10px] text-teal-400 font-bold uppercase block mb-1">Plazo de Garantía</label>
+                          <select value={nuevaReparacionFinalizada.diasGarantia} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, diasGarantia: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-teal-500">
+                              <option value="90">3 Meses (90 días - Estándar)</option>
+                              <option value="180">6 Meses (180 días - Batería)</option>
+                              <option value="30">1 Mes (30 días)</option>
+                              <option value="0">Sin Garantía</option>
+                          </select>
+                      </div>
+                      <div className="md:col-span-3">
                           <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Precio Final a Cobrar</label>
                           <div className="flex">
                               <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-xs" />
@@ -1465,7 +1635,7 @@
                                     <span className="bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded text-[10px] font-mono">IMEI: {item.equipoOriginal.imei}</span>
                                 </div>
                                 <p className="text-xs text-slate-400 mt-1">Reparación: <strong className="text-slate-300">{item.equipoOriginal.falla}</strong></p>
-                                {item.repuestoUsado && <p className="text-[11px] text-amber-400 mt-0.5"><i className="fa-solid fa-box mr-1"></i> Repuesto: {item.repuestoUsado} (Costo: {formatDinero(convertirParaMostrar(item.costoRepuestoUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)})</p>}
+                                {item.repuestoUsado && <p className="text-[11px] text-amber-400 mt-0.5"><i className="fa-solid fa-box mr-1"></i> Repuesto: {item.repuestoUsado} {item.repuestoProveedor && `[Prov: ${item.repuestoProveedor}]`} (Costo: {formatDinero(convertirParaMostrar(item.costoRepuestoUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)})</p>}
                                 <p className="text-[11px] text-slate-500 mt-0.5">Cliente: {item.equipoOriginal.origen === 'cliente' ? item.equipoOriginal.clienteNombre : item.equipoOriginal.gremio} • Fin: {item.fecha}</p>
                                 
                                 <div className="mt-2 flex gap-1.5 items-center flex-wrap">
@@ -1547,6 +1717,219 @@
                               </div>
                             </div>
                         );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* VISTA NUEVA: GARANTÍAS Y RMA PROVEEDORES */}
+              {vista === 'garantias' && (
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
+                  
+                  {/* TARJETAS RESUMEN GARANTÍAS */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
+                      <p className="text-[9px] sm:text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-circle-check mr-1"></i>Garantías Vigentes</p>
+                      <h2 className="text-xl sm:text-2xl font-black text-emerald-400">{(db.reparacionesFin || []).filter(r => {
+                          const dTot = r.diasGarantia !== undefined ? parseInt(r.diasGarantia) : (esTextoBateria(r.equipoOriginal?.falla) || esTextoBateria(r.repuestoUsado) ? 180 : 90);
+                          return dTot > 0 && (dTot - calcularDiasPasados(r.fechaTimestamp)) > 15;
+                      }).length}</h2>
+                    </div>
+                    <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
+                      <p className="text-[9px] sm:text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-clock mr-1"></i>Por Vencer (≤15d)</p>
+                      <h2 className="text-xl sm:text-2xl font-black text-rose-400">{(db.reparacionesFin || []).filter(r => {
+                          const dTot = r.diasGarantia !== undefined ? parseInt(r.diasGarantia) : (esTextoBateria(r.equipoOriginal?.falla) || esTextoBateria(r.repuestoUsado) ? 180 : 90);
+                          const rest = dTot - calcularDiasPasados(r.fechaTimestamp);
+                          return dTot > 0 && rest > 0 && rest <= 15;
+                      }).length}</h2>
+                    </div>
+                    <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
+                      <p className="text-[9px] sm:text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-truck-ramp-box mr-1"></i>RMA a Reclamar</p>
+                      <h2 className="text-xl sm:text-2xl font-black text-amber-400">{(db.rmaProveedores || []).length}</h2>
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 1: LISTA DE REPUESTOS FALLADOS PARA DEVOLVER AL PROVEEDOR (RMA) */}
+                  <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 sm:p-5 shadow-lg space-y-3">
+                    <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                          <i className="fa-solid fa-box-archive text-amber-400"></i> Repuestos para Reclamar al Proveedor (RMA)
+                        </h3>
+                        <p className="text-[11px] text-slate-400">Piezas que fallaron en garantía y tenés pendientes de cambio o nota de crédito.</p>
+                      </div>
+                      <span className="bg-amber-950 border border-amber-700 text-amber-400 font-black px-2.5 py-1 rounded-lg text-xs">{(db.rmaProveedores || []).length} pendientes</span>
+                    </div>
+
+                    {(db.rmaProveedores || []).length === 0 ? (
+                      <p className="text-center text-slate-500 py-4 text-xs font-bold border border-dashed border-slate-800 rounded-xl">No tenés repuestos fallados pendientes de reclamo.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {(db.rmaProveedores || []).map(rma => (
+                          <div key={rma.id} className="bg-slate-950 border border-amber-500/30 rounded-xl p-3.5 flex flex-col justify-between gap-3">
+                            <div>
+                              <div className="flex justify-between items-start gap-2">
+                                <span className="bg-amber-950 text-amber-300 border border-amber-700/60 px-2 py-0.5 rounded text-[10px] font-black uppercase">
+                                  <i className="fa-solid fa-truck-field mr-1"></i> Proveedor: {rma.proveedor}
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-mono">{rma.fecha}</span>
+                              </div>
+                              <h4 className="font-black text-white text-sm mt-2">{rma.repuesto}</h4>
+                              <p className="text-xs text-rose-300 mt-0.5">Falla: "{rma.motivoFalla}"</p>
+                              <p className="text-[10px] text-slate-500 mt-1 font-mono">Equipo: {rma.modeloEquipo} (IMEI: {rma.imeiEquipo}) • {rma.cliente}</p>
+                            </div>
+                            <div className="flex gap-2 pt-2 border-t border-slate-800/80">
+                              <button onClick={() => resolverRMAProveedor(rma, true)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-2.5 rounded-lg text-[11px] transition">
+                                <i className="fa-solid fa-rotate-left mr-1"></i> Me lo repusieron (+1 Stock)
+                              </button>
+                              <button onClick={() => resolverRMAProveedor(rma, false)} className="bg-slate-800 hover:bg-rose-950 text-slate-300 hover:text-rose-400 font-bold py-1.5 px-2.5 rounded-lg text-[11px] transition" title="Cerrar sin sumar stock">
+                                Cerrar
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SECCIÓN 2: BUSCADOR Y SEMÁFORO DE GARANTÍAS DE REPARACIONES */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-white"><i className="fa-solid fa-traffic-light text-teal-400 mr-2"></i>Semáforo de Garantías de Taller</h3>
+                        <p className="text-[11px] text-slate-400">3 meses general • 6 meses en baterías (verificando cargador original).</p>
+                      </div>
+                      <div className="flex gap-1.5 flex-wrap">
+                        <button onClick={() => setFiltroGarantia({...filtroGarantia, estado: 'todas'})} className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${filtroGarantia.estado === 'todas' ? 'bg-slate-700 text-white' : 'bg-slate-950 text-slate-400'}`}>Todas</button>
+                        <button onClick={() => setFiltroGarantia({...filtroGarantia, estado: 'vigente'})} className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${filtroGarantia.estado === 'vigente' ? 'bg-emerald-600 text-white' : 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/50'}`}>Vigentes</button>
+                        <button onClick={() => setFiltroGarantia({...filtroGarantia, estado: 'por_vencer'})} className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${filtroGarantia.estado === 'por_vencer' ? 'bg-rose-600 text-white' : 'bg-rose-950/60 text-rose-400 border border-rose-800/50'}`}>Por Vencer</button>
+                        <button onClick={() => setFiltroGarantia({...filtroGarantia, estado: 'vencida'})} className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${filtroGarantia.estado === 'vencida' ? 'bg-slate-600 text-white' : 'bg-slate-950 text-slate-500 border border-slate-800'}`}>Vencidas</button>
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-2.5 text-slate-500 text-xs"></i>
+                      <input type="text" placeholder="Buscar por IMEI, Nombre de Cliente, Teléfono, Modelo o Repuesto..." value={filtroGarantia.busqueda} onChange={e => setFiltroGarantia({...filtroGarantia, busqueda: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-white text-xs focus:outline-none focus:border-teal-500" />
+                    </div>
+
+                    <div className="space-y-3">
+                      {garantiasProcesadas.length === 0 ? (
+                        <p className="text-center text-slate-500 py-6 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">No se encontraron equipos con ese criterio.</p>
+                      ) : garantiasProcesadas.map(item => {
+                          const eq = item.equipoOriginal;
+                          let badgeSemaforo;
+                          let bordeTarjeta = 'border-slate-800';
+
+                          if (item.diasTotales === 0) {
+                              badgeSemaforo = <span className="bg-slate-800 border border-slate-700 text-slate-400 px-2.5 py-1 rounded-lg text-xs font-bold">SIN GARANTÍA</span>;
+                          } else if (item.estadoSemaforo === 'vigente') {
+                              bordeTarjeta = 'border-emerald-500/30';
+                              badgeSemaforo = <span className="bg-emerald-950 border border-emerald-700 text-emerald-400 px-2.5 py-1 rounded-lg text-xs font-black"><i className="fa-solid fa-circle text-[8px] mr-1.5 align-middle"></i>VIGENTE • Quedan {item.diasRestantes} días (Día {item.diasPasados}/{item.diasTotales})</span>;
+                          } else if (item.estadoSemaforo === 'por_vencer') {
+                              bordeTarjeta = 'border-rose-500/50';
+                              badgeSemaforo = <span className="bg-rose-950 border border-rose-700 text-rose-400 px-2.5 py-1 rounded-lg text-xs font-black animate-pulse"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>QUEDA POCO • {item.diasRestantes} {item.diasRestantes === 1 ? 'día' : 'días'} (Día {item.diasPasados}/{item.diasTotales})</span>;
+                          } else {
+                              badgeSemaforo = <span className="bg-slate-900 border border-slate-700 text-slate-500 px-2.5 py-1 rounded-lg text-xs font-bold"><i className="fa-solid fa-ban mr-1.5"></i>GARANTÍA VENCIDA (Pasaron {item.diasPasados} de {item.diasTotales} días)</span>;
+                          }
+
+                          return (
+                            <div key={item.id} className={`bg-slate-950 border ${bordeTarjeta} rounded-xl p-4 space-y-3 transition`}>
+                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <h4 className="font-black text-white text-sm sm:text-base">{eq.modelo}</h4>
+                                    <span className="bg-slate-900 border border-slate-700 text-slate-300 px-2 py-0.5 rounded text-[10px] font-mono">IMEI: {eq.imei}</span>
+                                    <span className="text-xs font-bold text-cyan-400">{eq.origen === 'cliente' ? eq.clienteNombre : eq.gremio}</span>
+                                    {eq.clienteTelefono && <span className="text-[11px] text-slate-500 font-mono">({eq.clienteTelefono})</span>}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 mt-0.5">Entregado el {item.fecha} • Arreglo: <strong className="text-slate-300">{eq.falla}</strong></p>
+                                </div>
+                                {badgeSemaforo}
+                              </div>
+
+                              {/* ALERTA OBLIGATORIA DE BATERÍA (6 MESES + CARGADOR ORIGINAL) */}
+                              {item.esBateria && (
+                                <div className="bg-amber-950/50 border border-amber-500/40 rounded-lg px-3 py-2 flex items-center gap-2 text-amber-300 text-xs">
+                                  <i className="fa-solid fa-plug-circle-exclamation text-amber-400 text-sm shrink-0"></i>
+                                  <span><strong>GARANTÍA DE BATERÍA (6 MESES):</strong> Verificar sin excepción que el cliente utilice cargador original antes de cubrir la garantía.</span>
+                                </div>
+                              )}
+
+                              {/* ESCUDO DE RECEPCIÓN (ESTADO VISUAL ORIGINAL Y REPUESTO) */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-900/70 p-2.5 rounded-lg border border-slate-800/80 text-xs">
+                                <div>
+                                  <span className="text-[9px] font-bold text-slate-500 uppercase block">Estado Visual cuando ingresó al taller:</span>
+                                  <span className="text-slate-300">{eq.estadoVisual || 'Sin observaciones'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] font-bold text-slate-500 uppercase block">Repuesto utilizado y Proveedor:</span>
+                                  <span className="text-amber-400 font-bold">{item.repuestoUsado ? `${item.repuestoUsado} (Prov: ${item.repuestoProveedor || 'No especificado'})` : 'No se registró repuesto de stock'}</span>
+                                </div>
+                              </div>
+
+                              {/* HISTORIAL DE VISITAS POR GARANTÍA SI TUVO */}
+                              {item.historialGarantia && item.historialGarantia.length > 0 && (
+                                <div className="bg-slate-900 border border-teal-500/30 rounded-lg p-2.5 space-y-1">
+                                  <p className="text-[10px] font-bold text-teal-400 uppercase"><i className="fa-solid fa-clock-rotate-left mr-1"></i>Reclamos de garantía registrados en este equipo:</p>
+                                  {item.historialGarantia.map(h => (
+                                    <p key={h.id} className="text-[11px] text-slate-300">• <strong>{h.fecha}:</strong> "{h.motivo}" — <span className="text-slate-400">{h.solucion}</span></p>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* BOTÓN Y PANEL PARA INGRESAR RECLAMO DE GARANTÍA */}
+                              <div className="flex justify-end pt-1">
+                                {panelReclamoGarantia.idReparacion !== item.id ? (
+                                  <button onClick={() => {
+                                      const matchStock = (db.stock || []).find(s => s.cantidad > 0 && item.repuestoUsado && s.concepto.toLowerCase() === item.repuestoUsado.toLowerCase());
+                                      setPanelReclamoGarantia({
+                                          idReparacion: item.id,
+                                          motivoFalla: '',
+                                          tipoSolucion: matchStock ? 'cambio_rma' : 'ajuste',
+                                          repuestoReemplazoId: matchStock ? String(matchStock.id) : ''
+                                      });
+                                  }} className="bg-slate-800 hover:bg-teal-700 text-slate-200 hover:text-white font-bold px-3 py-1.5 rounded-lg text-xs transition">
+                                    <i className="fa-solid fa-screwdriver-wrench mr-1.5"></i>Registrar Ingreso por Garantía
+                                  </button>
+                                ) : (
+                                  <form onSubmit={(e) => procesarReclamoGarantia(e, item)} className="w-full bg-slate-900 border border-teal-500/50 rounded-xl p-3.5 space-y-3 fade-in">
+                                    <p className="text-xs font-bold text-teal-400">Registrar atención en Garantía</p>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                      <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">¿Por qué falla volvió?</label>
+                                        <input type="text" required placeholder="Ej: Batería se descarga / Falla táctil" value={panelReclamoGarantia.motivoFalla} onChange={e => setPanelReclamoGarantia({...panelReclamoGarantia, motivoFalla: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs" />
+                                      </div>
+                                      <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Acción tomada</label>
+                                        <select value={panelReclamoGarantia.tipoSolucion} onChange={e => setPanelReclamoGarantia({...panelReclamoGarantia, tipoSolucion: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs font-bold">
+                                          <option value="cambio_rma">Cambiar repuesto y mandar fallado a RMA Proveedor</option>
+                                          <option value="ajuste">Ajuste / Limpieza en taller (Sin gastar repuesto)</option>
+                                        </select>
+                                      </div>
+                                    </div>
+
+                                    {panelReclamoGarantia.tipoSolucion === 'cambio_rma' && (
+                                      <div>
+                                        <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">Repuesto nuevo a descontar de tu Stock hoy</label>
+                                        <select required value={panelReclamoGarantia.repuestoReemplazoId} onChange={e => setPanelReclamoGarantia({...panelReclamoGarantia, repuestoReemplazoId: e.target.value})} className="w-full bg-slate-950 border border-amber-500/50 rounded-lg px-2.5 py-1.5 text-white text-xs">
+                                          <option value="">-- Elegí repuesto disponible en Stock --</option>
+                                          {(db.stock || []).filter(s => s.cantidad > 0).map(s => (
+                                            <option key={s.id} value={s.id}>{s.concepto} (Prov: {s.proveedor || 'S/P'} • Disp: {s.cantidad})</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+
+                                    <div className="flex gap-2 justify-end">
+                                      <button type="submit" className="bg-teal-600 hover:bg-teal-500 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition">Confirmar Garantía</button>
+                                      <button type="button" onClick={() => setPanelReclamoGarantia({idReparacion: null, motivoFalla: '', tipoSolucion: 'cambio_rma', repuestoReemplazoId: ''})} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Cancelar</button>
+                                    </div>
+                                  </form>
+                                )}
+                              </div>
+                            </div>
+                          );
                       })}
                     </div>
                   </div>
@@ -1702,7 +2085,7 @@
                 </div>
               )}
 
-              {/* VISTA 8: STOCK */}
+              {/* VISTA 8: STOCK CON PROVEEDORES */}
               {vista === 'stock' && (
                 <div className="max-w-4xl mx-auto space-y-5 fade-in">
                   <div className="bg-gradient-to-br from-amber-900/40 to-slate-900 border border-amber-500/30 rounded-2xl p-4 sm:p-5 shadow-lg text-center">
@@ -1715,38 +2098,74 @@
                       {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} className="text-slate-500 hover:text-amber-400 bg-slate-950 px-2 py-1 rounded border border-slate-800 text-xs"><i className="fa-solid fa-eraser"></i></button>}
                     </div>
                     
-                    <form onSubmit={agregarStock} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                      <div className="sm:col-span-5">
-                        {!mostrarInputStockLibre ? (
-                          <select value={nuevoStock.concepto} onChange={e => {
-                              if (e.target.value === 'OTRO') { setMostrarInputStockLibre(true); setNuevoStock({...nuevoStock, concepto: ''}); }
-                              else setNuevoStock({...nuevoStock, concepto: e.target.value});
-                          }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
-                            <option value="">-- Buscar en memoria --</option>
-                            {opcionesStock.map(op => <option key={op} value={op}>{op}</option>)}
-                            <option value="OTRO" className="font-bold text-amber-400">➕ Escribir nuevo...</option>
-                          </select>
-                        ) : (
-                          <div className="flex gap-1.5 fade-in">
-                            <input type="text" required autoFocus placeholder="Ej: Batería iPhone 15 Pro" value={nuevoStock.concepto} onChange={e => setNuevoStock({...nuevoStock, concepto: e.target.value})} className="flex-1 min-w-0 bg-slate-900 border border-amber-500 rounded-xl px-3 py-2 text-white text-xs focus:outline-none" />
-                            <button type="button" onClick={() => {setMostrarInputStockLibre(false); setNuevoStock({...nuevoStock, concepto: ''});}} className="bg-slate-800 text-white px-2.5 py-2 rounded-xl text-xs"><i className="fa-solid fa-xmark"></i></button>
+                    <form onSubmit={agregarStock} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Repuesto</label>
+                          {!mostrarInputStockLibre ? (
+                            <select value={nuevoStock.concepto} onChange={e => {
+                                if (e.target.value === 'OTRO') { setMostrarInputStockLibre(true); setNuevoStock({...nuevoStock, concepto: ''}); }
+                                else setNuevoStock({...nuevoStock, concepto: e.target.value});
+                            }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
+                              <option value="">-- Buscar en memoria --</option>
+                              {opcionesStock.map(op => <option key={op} value={op}>{op}</option>)}
+                              <option value="OTRO" className="font-bold text-amber-400">➕ Escribir nuevo...</option>
+                            </select>
+                          ) : (
+                            <div className="flex gap-1.5 fade-in">
+                              <input type="text" required autoFocus placeholder="Ej: Batería iPhone 15 Pro" value={nuevoStock.concepto} onChange={e => setNuevoStock({...nuevoStock, concepto: e.target.value})} className="flex-1 min-w-0 bg-slate-900 border border-amber-500 rounded-xl px-3 py-2 text-white text-xs focus:outline-none" />
+                              <button type="button" onClick={() => {setMostrarInputStockLibre(false); setNuevoStock({...nuevoStock, concepto: ''});}} className="bg-slate-800 text-white px-2.5 py-2 rounded-xl text-xs"><i className="fa-solid fa-xmark"></i></button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">Proveedor de origen</label>
+                          {!mostrarInputProveedorLibre ? (
+                            <select required value={nuevoStock.proveedor} onChange={e => {
+                                if (e.target.value === 'OTRO') { setMostrarInputProveedorLibre(true); setNuevoStock({...nuevoStock, proveedor: ''}); }
+                                else setNuevoStock({...nuevoStock, proveedor: e.target.value});
+                            }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
+                              <option value="">-- Seleccionar Proveedor --</option>
+                              {opcionesProveedores.map(pr => <option key={pr} value={pr}>{pr}</option>)}
+                              <option value="OTRO" className="font-bold text-amber-400">➕ Agregar proveedor...</option>
+                            </select>
+                          ) : (
+                            <div className="flex gap-1.5 fade-in">
+                              <input type="text" required autoFocus placeholder="Nombre del proveedor..." value={nuevoStock.proveedor} onChange={e => setNuevoStock({...nuevoStock, proveedor: e.target.value})} className="flex-1 min-w-0 bg-slate-900 border border-amber-500 rounded-xl px-3 py-2 text-white text-xs focus:outline-none" />
+                              <button type="button" onClick={() => {setMostrarInputProveedorLibre(false); setNuevoStock({...nuevoStock, proveedor: ''});}} className="bg-slate-800 text-white px-2.5 py-2 rounded-xl text-xs"><i className="fa-solid fa-xmark"></i></button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                        <div className="sm:col-span-3">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Cantidad</label>
+                          <input type="number" min="1" required placeholder="Cant." value={nuevoStock.cantidad} onChange={e => setNuevoStock({...nuevoStock, cantidad: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-center text-xs" />
+                        </div>
+                        <div className="sm:col-span-6">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Costo Unitario</label>
+                          <div className="flex">
+                            <input type="number" step="any" required placeholder="Costo Unit." value={nuevoStock.monto} onChange={e => setNuevoStock({...nuevoStock, monto: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono text-xs" />
+                            <select value={nuevoStock.moneda} onChange={e => setNuevoStock({...nuevoStock, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 border-l-0 rounded-r-xl px-2.5 py-2 text-white text-xs font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                           </div>
-                        )}
+                        </div>
+                        <button type="submit" className="sm:col-span-3 bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-2 rounded-xl transition text-xs h-[34px]"><i className="fa-solid fa-plus mr-1"></i> Ingresar Stock</button>
                       </div>
-                      <input type="number" min="1" required placeholder="Cant." value={nuevoStock.cantidad} onChange={e => setNuevoStock({...nuevoStock, cantidad: e.target.value})} className="sm:col-span-2 bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-center text-xs" />
-                      <div className="sm:col-span-3 flex">
-                        <input type="number" step="any" required placeholder="Costo Unit." value={nuevoStock.monto} onChange={e => setNuevoStock({...nuevoStock, monto: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono text-xs" />
-                        <select value={nuevoStock.moneda} onChange={e => setNuevoStock({...nuevoStock, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 border-l-0 rounded-r-xl px-2 py-2 text-white text-xs font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
-                      </div>
-                      <button type="submit" className="sm:col-span-2 bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-2 rounded-xl transition text-xs"><i className="fa-solid fa-plus mr-1"></i> Sumar</button>
                     </form>
 
                     <div className="space-y-2.5 pt-2">
                       {(db.stock || []).length === 0 ? <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.stock.map(item => (
                         <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                           <div className="min-w-0">
-                            <p className="font-bold text-white text-sm">{item.concepto}</p>
-                            {!modoPrivado && <p className="text-[10px] text-slate-500 font-mono">Costo Base: {item.monto} {item.moneda} (Eq: {formatDinero(convertirParaMostrar(item.monto, item.moneda))} c/u)</p>}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-bold text-white text-sm">{item.concepto}</p>
+                              <span className="bg-slate-900 border border-amber-500/30 text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold">
+                                <i className="fa-solid fa-truck-field mr-1"></i>{item.proveedor || 'Sin proveedor'}
+                              </span>
+                            </div>
+                            {!modoPrivado && <p className="text-[10px] text-slate-500 font-mono mt-0.5">Costo Base: {item.monto} {item.moneda} (Eq: {formatDinero(convertirParaMostrar(item.monto, item.moneda))} c/u)</p>}
                           </div>
                           <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-3">
                             <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden shrink-0">
@@ -1755,7 +2174,7 @@
                               <button onClick={() => modificarCantidadStock(item.id, 1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-plus text-[10px]"></i></button>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
-                              <button onClick={() => setEditandoStock({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
+                              <button onClick={() => setEditandoStock({...item, proveedor: item.proveedor || ''})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => {
                                   const log = generarLog('Eliminó Repuesto', `Eliminó "${item.concepto}" del sistema.`, item);
                                   guardarEnNube({...db, stock: db.stock.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
@@ -1949,7 +2368,7 @@
                     <label className="text-slate-400 font-bold mb-1 block">Monto a Cobrar (En USD Base)</label>
                     <div className="flex gap-2">
                       <input type="number" step="any" required value={editandoDeudaCobrar.monto} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, monto: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
-                      <select value={editandoDeudaCobrar.moneda} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                      <select value={editandoDeudaCobrar.moneda} onChange={e => setEditandoDeudaCobrar({...editandoDeudaCobrar, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
                     </div>
                   </div>
                 </div>
@@ -1965,14 +2384,17 @@
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
                 e.preventDefault();
-                const actualizado = db.stock.map(s => s.id === editandoStock.id ? { ...s, concepto: editandoStock.concepto, monto: parseFloat(editandoStock.monto) || 0, moneda: editandoStock.moneda } : s);
-                const log = generarLog('Editó Repuesto de Stock', `Modificó "${editandoStock.concepto}". Precio: ${editandoStock.monto} ${editandoStock.moneda}`, editandoStock);
-                guardarEnNube({ ...db, stock: actualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+                const provTrim = (editandoStock.proveedor || 'Sin proveedor').trim();
+                const actualizado = db.stock.map(s => s.id === editandoStock.id ? { ...s, concepto: editandoStock.concepto, monto: parseFloat(editandoStock.monto) || 0, moneda: editandoStock.moneda, proveedor: provTrim } : s);
+                const nuevasProv = [...new Set([provTrim, ...(db.historiaProveedores || [])])];
+                const log = generarLog('Editó Repuesto de Stock', `Modificó "${editandoStock.concepto}" (Prov: ${provTrim}). Precio: ${editandoStock.monto} ${editandoStock.moneda}`, editandoStock);
+                guardarEnNube({ ...db, stock: actualizado, historiaProveedores: nuevasProv, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoStock(null);
               }} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-xs w-full space-y-4 shadow-2xl">
                 <h3 className="font-black text-white text-base border-b border-slate-800 pb-2.5">Editar Repuesto</h3>
                 <div className="space-y-3 text-xs">
                   <div><label className="text-slate-400 font-bold mb-1 block">Concepto</label><input type="text" required value={editandoStock.concepto} onChange={e => setEditandoStock({...editandoStock, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" /></div>
+                  <div><label className="text-amber-400 font-bold mb-1 block">Proveedor</label><input type="text" required value={editandoStock.proveedor || ''} onChange={e => setEditandoStock({...editandoStock, proveedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" /></div>
                   <div>
                     <label className="text-slate-400 font-bold mb-1 block">Costo Unitario</label>
                     <div className="flex gap-2">
