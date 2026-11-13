@@ -666,7 +666,7 @@
               diasGarantia: diasG, historialGarantia: [],
               montoCobradoOriginal: montoFin, monedaCobroOriginal: nuevaReparacionFinalizada.monedaCobro,
               montoCobrado: mUSD, monedaCobro: 'USD', montoAdeudadoRestante: mUSD, 
-              estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar', metodosPago: []
+              estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar', metodosPago: [], detallePagos: []
           };
           const repsFin = [regFin, ...(db.reparacionesFin || [])];
           const tallerAc = (db.taller || []).filter(e => e.id !== equipo.id);
@@ -714,7 +714,16 @@
                   let m = r.metodosPago || [];
                   const nMet = panelCobroReparacion.metodoPago.trim();
                   if (nMet && !m.includes(nMet)) m = [...m, nMet];
-                  return { ...r, montoAdeudadoRestante: nvoRestante, estadoCobro: estadoF, metodosPago: m };
+                  const nuevoPago = {
+                      id: Date.now(),
+                      metodo: nMet,
+                      monto: mFisico,
+                      moneda: panelCobroReparacion.monedaPago,
+                      montoUSD: aUSD,
+                      fecha: new Date().toLocaleDateString()
+                  };
+                  const detPagos = [...(r.detallePagos || []), nuevoPago];
+                  return { ...r, montoAdeudadoRestante: nvoRestante, estadoCobro: estadoF, metodosPago: m, detallePagos: detPagos };
               }
               return r;
           });
@@ -1672,8 +1681,16 @@
                                     ) : (
                                         <span className="bg-emerald-950 border border-emerald-800 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold"><i className="fa-solid fa-check mr-1"></i> COBRADO</span>
                                     )}
-                                    {item.metodosPago && item.metodosPago.length > 0 && (
-                                        <span className="text-[10px] text-slate-400 border border-slate-800 bg-slate-900 px-2 py-0.5 rounded">Vía: {item.metodosPago.join(', ')}</span>
+                                    {item.detallePagos && item.detallePagos.length > 0 ? (
+                                        item.detallePagos.map((p, idxP) => (
+                                            <span key={p.id || idxP} className="text-[10px] text-cyan-300 border border-cyan-500/30 bg-cyan-950/40 px-2 py-0.5 rounded font-mono">
+                                                {p.metodo}: {formatDinero(p.monto, p.moneda)}
+                                            </span>
+                                        ))
+                                    ) : (
+                                        item.metodosPago && item.metodosPago.length > 0 && (
+                                            <span className="text-[10px] text-slate-400 border border-slate-800 bg-slate-900 px-2 py-0.5 rounded">Vía: {item.metodosPago.join(', ')}</span>
+                                        )
                                     )}
                                 </div>
                               </div>
