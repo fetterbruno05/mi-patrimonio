@@ -154,6 +154,7 @@
       const [pagoDeudaActivo, setPagoDeudaActivo] = useState({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
       const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' }); 
       const [desgloseCobrarId, setDesgloseCobrarId] = useState(null); 
+      const [desgloseDeudaId, setDesgloseDeudaId] = useState(null); 
       
       const [editandoActivo, setEditandoActivo] = useState(null);
       const [editandoFijo, setEditandoFijo] = useState(null);
@@ -446,17 +447,25 @@
       const agregarDeuda = (e) => {
         e.preventDefault();
         const montoNuevo = parseFloat(nuevaDeuda.monto) || 0;
+        const motivoTrim = nuevaDeuda.motivo.trim();
+        const fechaHoy = new Date().toLocaleDateString();
         let deudasAc = [...(db.deudas || [])];
         const idx = deudasAc.findIndex(d => d.acreedor.trim().toLowerCase() === nuevaDeuda.acreedor.trim().toLowerCase() && d.moneda === nuevaDeuda.moneda);
+        const nvoMov = { id: Date.now(), fecha: fechaHoy, motivo: motivoTrim, monto: montoNuevo, moneda: nuevaDeuda.moneda, tipo: 'cargo' };
+
         let log;
         if (idx !== -1) {
+          const movsPrevios = Array.isArray(deudasAc[idx].movimientos) && deudasAc[idx].movimientos.length > 0
+            ? deudasAc[idx].movimientos
+            : [{ id: deudasAc[idx].id, fecha: deudasAc[idx].fecha || fechaHoy, motivo: deudasAc[idx].motivo || 'Saldo inicial', monto: parseFloat(deudasAc[idx].monto), moneda: deudasAc[idx].moneda, tipo: 'cargo' }];
           deudasAc[idx].monto = (parseFloat(deudasAc[idx].monto) + montoNuevo).toFixed(2);
-          deudasAc[idx].motivo = nuevaDeuda.motivo.trim(); 
-          log = generarLog('Aumentó Deuda', `Le sumó ${montoNuevo} ${nuevaDeuda.moneda} a la deuda con "${deudasAc[idx].acreedor}".`, deudasAc[idx]);
+          deudasAc[idx].motivo = `${movsPrevios.filter(m => m.tipo === 'cargo').length + 1} préstamos acumulados (Últ: ${motivoTrim})`;
+          deudasAc[idx].movimientos = [nvoMov, ...movsPrevios];
+          log = generarLog('Aumentó Deuda', `Le sumó ${montoNuevo} ${nuevaDeuda.moneda} a la deuda con "${deudasAc[idx].acreedor}" (${motivoTrim}).`, deudasAc[idx]);
         } else {
-          const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), motivo: nuevaDeuda.motivo.trim(), monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: new Date().toLocaleDateString() };
+          const item = { id: Date.now(), acreedor: nuevaDeuda.acreedor.trim(), motivo: motivoTrim, monto: montoNuevo.toFixed(2), moneda: nuevaDeuda.moneda, fecha: fechaHoy, movimientos: [nvoMov] };
           deudasAc.unshift(item);
-          log = generarLog('Creó Deuda', `Deuda con "${item.acreedor}" por ${item.monto} ${item.moneda}.`, item);
+          log = generarLog('Creó Deuda', `Deuda con "${item.acreedor}" por ${item.monto} ${item.moneda} (${motivoTrim}).`, item);
         }
         guardarEnNube({ ...db, deudas: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevaDeuda({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
@@ -474,12 +483,25 @@
         const op = procesarDescuentoSeguro(pagoDeudaActivo.walletId, abonoFisico, pagoDeudaActivo.monedaAbono, db.activos);
         if (!op.success) return alert(op.msg); 
 
-        const nvoMonto = parseFloat(itemDeuda.monto) - abonoConvertido;
-        let deudasAc = [];
-        if (nvoMonto <= 0.05) deudasAc = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
-        else deudasAc = (db.deudas || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nvoMonto.toFixed(4) } : d);
-
         const wUsada = op.activosActualizados.find(w => w.id === parseInt(pagoDeudaActivo.walletId))?.nombre;
+        const nvoMonto = parseFloat(itemDeuda.monto) - abonoConvertido;
+        const movAbono = { id: Date.now(), fecha: new Date().toLocaleDateString(), motivo: `Abono desde ${wUsada} (${abonoFisico} ${pagoDeudaActivo.monedaAbono})`, monto: abonoConvertido, moneda: itemDeuda.moneda, tipo: 'abono' };
+
+        let deudasAc = [];
+        if (nvoMonto <= 0.05) {
+          deudasAc = (db.deudas || []).filter(d => d.id !== itemDeuda.id);
+        } else {
+          deudasAc = (db.deudas || []).map(d => {
+            if (d.id === itemDeuda.id) {
+              const movsBase = Array.isArray(d.movimientos) && d.movimientos.length > 0
+                ? d.movimientos
+                : [{ id: d.id, fecha: d.fecha || new Date().toLocaleDateString(), motivo: d.motivo || 'Saldo inicial', monto: parseFloat(d.monto), moneda: d.moneda, tipo: 'cargo' }];
+              return { ...d, monto: nvoMonto.toFixed(4), movimientos: [movAbono, ...movsBase] };
+            }
+            return d;
+          });
+        }
+
         const log = generarLog('Abonó a Deuda', `Pagó ${abonoFisico} ${pagoDeudaActivo.monedaAbono} a "${itemDeuda.acreedor}" desde ${wUsada}. Restan ${nvoMonto.toFixed(2)} ${itemDeuda.moneda}.`);
         guardarEnNube({ ...db, activos: op.activosActualizados, deudas: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setPagoDeudaActivo({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
@@ -2133,15 +2155,40 @@
                               </div>
                             </div>
                           ) : (
-                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-2.5">
-                              <div className="flex gap-1.5">
+                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-2.5 flex-wrap gap-2">
+                              <div className="flex gap-1.5 items-center">
                                 <button onClick={() => setEditandoDeuda({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
                                 <button onClick={() => {
                                     const log = generarLog('Eliminó Deuda', `Borró la deuda de "${item.acreedor}".`, item);
                                     guardarEnNube({...db, deudas: db.deudas.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                                 }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-trash"></i></button>
+                                <button onClick={() => setDesgloseDeudaId(desgloseDeudaId === item.id ? null : item.id)} className="bg-slate-900 hover:bg-slate-800 text-rose-400 border border-rose-500/30 px-2.5 py-1 rounded-lg text-xs font-bold transition">
+                                  <i className={`fa-solid ${desgloseDeudaId === item.id ? 'fa-chevron-up' : 'fa-list-ul'} mr-1.5`}></i>
+                                  {desgloseDeudaId === item.id ? 'Ocultar desglose' : `Ver desglose (${(item.movimientos || []).length || 1})`}
+                                </button>
                               </div>
                               <button onClick={() => setPagoDeudaActivo({ idDeuda: item.id, walletId: '', montoAbono: '', monedaAbono: monedaVisual })} className="bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 px-3 py-1.5 rounded-lg text-xs font-bold transition">Abonar</button>
+                            </div>
+                          )}
+
+                          {desgloseDeudaId === item.id && (
+                            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2 fade-in">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">
+                                <i className="fa-solid fa-receipt text-rose-400 mr-1.5"></i>Historial de préstamos y abonos con {item.acreedor}
+                              </p>
+                              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                                {(item.movimientos && item.movimientos.length > 0 ? item.movimientos : [{ id: item.id, fecha: item.fecha || '-', motivo: item.motivo, monto: item.monto, moneda: item.moneda, tipo: 'cargo' }]).map((m, idxM) => (
+                                  <div key={m.id || idxM} className="bg-slate-950 border border-slate-800/80 rounded-lg p-2.5 flex justify-between items-center gap-2 text-xs">
+                                    <div className="min-w-0">
+                                      <p className="font-bold text-white truncate">{m.motivo}</p>
+                                      <p className="text-[10px] text-slate-500 font-mono mt-0.5">{m.fecha} {!modoPrivado && `• Base: ${redondear(parseFloat(m.monto))} ${m.moneda}`}</p>
+                                    </div>
+                                    <span className={`font-mono font-black shrink-0 ${m.tipo === 'abono' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                      {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.monto, m.moneda, monedaVisual), monedaVisual)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </div>
