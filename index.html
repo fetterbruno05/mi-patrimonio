@@ -1007,11 +1007,11 @@
           }));
       }, [db.stock, db.cotizacionDolar]);
 
-      const stockCriticoCount = useMemo(() => stockAgrupado.filter(g => g.cantidadTotal <= 1).length, [stockAgrupado]);
+      const stockCriticoCount = useMemo(() => stockAgrupado.filter(g => g.cantidadTotal <= 3).length, [stockAgrupado]);
 
       const stockFiltrado = useMemo(() => {
           const filtrados = stockAgrupado.filter(grupo => {
-              if (filtroStock.soloCritico && grupo.cantidadTotal > 1) return false;
+              if (filtroStock.soloCritico && grupo.cantidadTotal > 3) return false;
               if (filtroStock.busqueda.trim()) {
                   const q = filtroStock.busqueda.toLowerCase().trim();
                   const matchConcepto = grupo.concepto.toLowerCase().includes(q);
@@ -2421,7 +2421,7 @@
                       <h2 className="text-2xl font-black text-white">{formatDinero(convertirParaMostrar(tStkUSD, 'USD'))}</h2>
                     </div>
                     <button onClick={() => setFiltroStock({...filtroStock, soloCritico: !filtroStock.soloCritico})} className={`rounded-2xl p-4 shadow-lg text-center border transition-all ${filtroStock.soloCritico ? 'bg-rose-950/80 border-rose-500 ring-2 ring-rose-500/30' : 'bg-slate-900 border-rose-500/30 hover:border-rose-500/60'}`}>
-                      <p className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Stock Crítico / A Comprar (≤ 1 unid.)</p>
+                      <p className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Stock Crítico / A Comprar (≤ 3 unid.)</p>
                       <h2 className="text-2xl font-black text-rose-400">{stockCriticoCount} <span className="text-xs font-normal text-slate-400">{filtroStock.soloCritico ? '(Mostrando faltantes)' : '(Tocá para filtrar)'}</span></h2>
                     </button>
                   </div>
@@ -2528,7 +2528,7 @@
                       ) : stockFiltrado.map(grupo => {
                         const cantTotal = grupo.cantidadTotal;
                         const esAgotado = cantTotal === 0;
-                        const esBajo = cantTotal === 1;
+                        const esBajo = cantTotal > 0 && cantTotal <= 3;
                         const loteParaRestar = grupo.lotes.find(l => parseInt(l.cantidad) > 0) || grupo.lotes[0];
                         const loteParaSumar = grupo.lotes[grupo.lotes.length - 1];
                         const abierto = desgloseStockKey === grupo.key;
@@ -2558,7 +2558,7 @@
 
                               <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden shrink-0" title="Descuenta del lote más antiguo / Suma al más reciente">
                                 <button onClick={() => modificarCantidadStock(loteParaRestar.id, -1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-minus text-[10px]"></i></button>
-                                <span className={`px-3 py-1 font-mono font-black border-x border-slate-700 bg-slate-950 text-xs min-w-[38px] text-center ${cantTotal <= 1 ? 'text-rose-400' : 'text-amber-400'}`}>{cantTotal}</span>
+                                <span className={`px-3 py-1 font-mono font-black border-x border-slate-700 bg-slate-950 text-xs min-w-[38px] text-center ${cantTotal <= 3 ? 'text-rose-400' : 'text-amber-400'}`}>{cantTotal}</span>
                                 <button onClick={() => modificarCantidadStock(loteParaSumar.id, 1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-plus text-[10px]"></i></button>
                               </div>
                             </div>
