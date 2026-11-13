@@ -144,7 +144,7 @@
       const [mostrarInputMetodoLibre, setMostrarInputMetodoLibre] = useState(false);
 
       // ESTADOS DE GARANTÍAS Y RMA
-      const [filtroGarantia, setFiltroGarantia] = useState({ busqueda: '', estado: 'todas' });
+      const [filtroGarantia, setFiltroGarantia] = useState({ busqueda: '', estado: 'todas', orden: 'menos_tiempo' });
       const [panelReclamoGarantia, setPanelReclamoGarantia] = useState({ idReparacion: null, motivoFalla: '', tipoSolucion: 'cambio_rma', repuestoReemplazoId: '' });
 
       const [filtroRep, setFiltroRep] = useState({ cliente: '', telefono: '', modelo: '', imei: '', origen: '', estadoCobro: '', metodoPago: '', fechaExacta: '', desde: '', hasta: '' });
@@ -910,9 +910,9 @@
           });
       }, [db.reparacionesFin, filtroRep]);
 
-      // CÁLCULO DE GARANTÍAS Y SEMÁFORO
+      // CÁLCULO DE GARANTÍAS, SEMÁFORO Y ORDENAMIENTO POR TIEMPO
       const garantiasProcesadas = useMemo(() => {
-          return (db.reparacionesFin || []).map(item => {
+          const procesadas = (db.reparacionesFin || []).map(item => {
               const diasPasados = calcularDiasPasados(item.fechaTimestamp);
               const esBat = esTextoBateria(item.equipoOriginal?.falla) || esTextoBateria(item.repuestoUsado);
               const diasTotales = item.diasGarantia !== undefined ? parseInt(item.diasGarantia) : (esBat ? 180 : 90);
@@ -947,6 +947,27 @@
                   if (!match) return false;
               }
               return true;
+          });
+
+          return [...procesadas].sort((a, b) => {
+              if (filtroGarantia.orden === 'recientes') return b.fechaTimestamp - a.fechaTimestamp;
+              if (filtroGarantia.orden === 'antiguas') return a.fechaTimestamp - b.fechaTimestamp;
+              
+              const aActiva = a.diasTotales > 0 && a.diasRestantes > 0;
+              const bActiva = b.diasTotales > 0 && b.diasRestantes > 0;
+
+              if (filtroGarantia.orden === 'menos_tiempo') {
+                  if (aActiva && !bActiva) return -1;
+                  if (!aActiva && bActiva) return 1;
+                  if (aActiva && bActiva) return a.diasRestantes - b.diasRestantes;
+                  return b.diasRestantes - a.diasRestantes;
+              }
+              if (filtroGarantia.orden === 'mas_tiempo') {
+                  if (aActiva && !bActiva) return -1;
+                  if (!aActiva && bActiva) return 1;
+                  return b.diasRestantes - a.diasRestantes;
+              }
+              return 0;
           });
       }, [db.reparacionesFin, filtroGarantia]);
 
@@ -2030,9 +2051,17 @@
                       </div>
                     </div>
 
-                    <div className="relative">
-                      <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-2.5 text-slate-500 text-xs"></i>
-                      <input type="text" placeholder="Buscar por IMEI, Nombre de Cliente, Teléfono, Modelo o Repuesto..." value={filtroGarantia.busqueda} onChange={e => setFiltroGarantia({...filtroGarantia, busqueda: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-white text-xs focus:outline-none focus:border-teal-500" />
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="relative flex-1">
+                        <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-2.5 text-slate-500 text-xs"></i>
+                        <input type="text" placeholder="Buscar por IMEI, Nombre de Cliente, Teléfono, Modelo o Repuesto..." value={filtroGarantia.busqueda} onChange={e => setFiltroGarantia({...filtroGarantia, busqueda: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-white text-xs focus:outline-none focus:border-teal-500" />
+                      </div>
+                      <select value={filtroGarantia.orden || 'menos_tiempo'} onChange={e => setFiltroGarantia({...filtroGarantia, orden: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-teal-500">
+                        <option value="menos_tiempo">Ordenar: Menos tiempo restante</option>
+                        <option value="mas_tiempo">Ordenar: Más tiempo restante</option>
+                        <option value="recientes">Ordenar: Más recientes primero</option>
+                        <option value="antiguas">Ordenar: Más antiguas primero</option>
+                      </select>
                     </div>
 
                     <div className="space-y-3">
