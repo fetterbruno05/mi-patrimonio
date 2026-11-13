@@ -132,7 +132,8 @@
       const [nuevoStock, setNuevoStock] = useState({ concepto: '', cantidad: '1', monto: '', moneda: 'USD', proveedor: '' });
       const [mostrarInputStockLibre, setMostrarInputStockLibre] = useState(false);
       const [mostrarInputProveedorLibre, setMostrarInputProveedorLibre] = useState(false);
-      const [filtroStock, setFiltroStock] = useState({ busqueda: '', soloCritico: false });
+      const [filtroStock, setFiltroStock] = useState({ busqueda: '', soloCritico: false, orden: 'modelo_az' });
+      const [desgloseStockKey, setDesgloseStockKey] = useState(null);
 
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
@@ -567,19 +568,27 @@
         if (!nuevoStock.proveedor) return alert('Seleccioná o escribí el proveedor del repuesto.');
         const conceptoTrim = nuevoStock.concepto.trim();
         const proveedorTrim = nuevoStock.proveedor.trim();
+        const precioNum = parseFloat(nuevoStock.monto) || 0;
+        const fechaHoy = new Date().toLocaleDateString();
         let stockAc = [...(db.stock || [])];
-        const idx = stockAc.findIndex(s => s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase() && (s.proveedor || '').toLowerCase().trim() === proveedorTrim.toLowerCase());
+
+        // Solo unifica en el mismo lote si coincide modelo, proveedor, precio, moneda y fecha; si cambia algo, crea un lote nuevo dentro del modelo
+        const idx = stockAc.findIndex(s => 
+          s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase() && 
+          (s.proveedor || '').toLowerCase().trim() === proveedorTrim.toLowerCase() &&
+          parseFloat(s.monto) === precioNum &&
+          s.moneda === nuevoStock.moneda &&
+          (s.fecha || new Date(s.id).toLocaleDateString()) === fechaHoy
+        );
+
         let log;
         if (idx !== -1) {
           stockAc[idx].cantidad = parseInt(stockAc[idx].cantidad) + parseInt(nuevoStock.cantidad);
-          stockAc[idx].monto = parseFloat(nuevoStock.monto) || 0;
-          stockAc[idx].moneda = nuevoStock.moneda;
-          stockAc[idx].proveedor = proveedorTrim;
-          log = generarLog('Aumentó Repuesto Existente', `Sumó ${nuevoStock.cantidad} unid. de "${stockAc[idx].concepto}" (Prov: ${proveedorTrim}).`, stockAc[idx]);
+          log = generarLog('Aumentó Lote de Stock', `Sumó ${nuevoStock.cantidad} unid. al lote de "${stockAc[idx].concepto}" (Prov: ${proveedorTrim}).`, stockAc[idx]);
         } else {
-          const item = { id: Date.now(), concepto: conceptoTrim, cantidad: parseInt(nuevoStock.cantidad) || 1, monto: parseFloat(nuevoStock.monto) || 0, moneda: nuevoStock.moneda, proveedor: proveedorTrim };
+          const item = { id: Date.now(), fecha: fechaHoy, concepto: conceptoTrim, cantidad: parseInt(nuevoStock.cantidad) || 1, monto: precioNum, moneda: nuevoStock.moneda, proveedor: proveedorTrim };
           stockAc.unshift(item);
-          log = generarLog('Creó Nuevo Repuesto', `Ingresó ${item.cantidad} unid. de "${item.concepto}" (Prov: ${proveedorTrim}).`, item);
+          log = generarLog('Ingresó Lote de Stock', `Ingresó lote de ${item.cantidad} unid. de "${item.concepto}" (Prov: ${proveedorTrim} • ${fechaHoy}).`, item);
         }
         const historiaNueva = [...new Set([conceptoTrim, ...(db.historiaStock || [])])];
         const historiaProvNueva = [...new Set([proveedorTrim, ...(db.historiaProveedores || ['Proveedor Principal'])])];
@@ -941,20 +950,65 @@
           });
       }, [db.reparacionesFin, filtroGarantia]);
 
-      const stockCriticoCount = useMemo(() => (db.stock || []).filter(s => parseInt(s.cantidad) <= 1).length, [db.stock]);
+      const stockAgrupado = useMemo(() => {
+          const grupos = {};
+          (db.stock || []).forEach(item => {
+              const nombreLimpio = (item.concepto || 'Sin nombre').trim();
+              const key = nombreLimpio.toLowerCase();
+              const cant = parseInt(item.cantidad) || 0;
+              const costoUSD = aUSDBase(item.monto, item.moneda, db.cotizacionDolar);
+              const fechaLote = item.fecha || new Date(item.id).toLocaleDateString();
+
+              if (!grupos[key]) {
+                  grupos[key] = {
+                      key,
+                      concepto: nombreLimpio,
+                      cantidadTotal: 0,
+                      capitalTotalUSD: 0,
+                      lotes: [],
+                      proveedores: new Set(),
+                      tsMasAntiguo: item.id,
+                      tsMasReciente: item.id
+                  };
+              }
+              grupos[key].cantidadTotal += cant;
+              grupos[key].capitalTotalUSD += (costoUSD * cant);
+              grupos[key].lotes.push({ ...item, fechaLote });
+              if (item.proveedor) grupos[key].proveedores.add(item.proveedor);
+              if (item.id < grupos[key].tsMasAntiguo) grupos[key].tsMasAntiguo = item.id;
+              if (item.id > grupos[key].tsMasReciente) grupos[key].tsMasReciente = item.id;
+          });
+
+          return Object.values(grupos).map(g => ({
+              ...g,
+              proveedoresList: Array.from(g.proveedores),
+              lotes: g.lotes.sort((a, b) => a.id - b.id) // Ordenados del más antiguo al más nuevo
+          }));
+      }, [db.stock, db.cotizacionDolar]);
+
+      const stockCriticoCount = useMemo(() => stockAgrupado.filter(g => g.cantidadTotal <= 1).length, [stockAgrupado]);
 
       const stockFiltrado = useMemo(() => {
-          return (db.stock || []).filter(item => {
-              if (filtroStock.soloCritico && parseInt(item.cantidad) > 1) return false;
+          const filtrados = stockAgrupado.filter(grupo => {
+              if (filtroStock.soloCritico && grupo.cantidadTotal > 1) return false;
               if (filtroStock.busqueda.trim()) {
                   const q = filtroStock.busqueda.toLowerCase().trim();
-                  const matchConcepto = (item.concepto || '').toLowerCase().includes(q);
-                  const matchProv = (item.proveedor || '').toLowerCase().includes(q);
-                  if (!matchConcepto && !matchProv) return false;
+                  const matchConcepto = grupo.concepto.toLowerCase().includes(q);
+                  const matchProv = grupo.proveedoresList.some(p => p.toLowerCase().includes(q));
+                  const matchFecha = grupo.lotes.some(l => (l.fechaLote || '').toLowerCase().includes(q));
+                  if (!matchConcepto && !matchProv && !matchFecha) return false;
               }
               return true;
           });
-      }, [db.stock, filtroStock]);
+
+          return [...filtrados].sort((a, b) => {
+              if (filtroStock.orden === 'antiguos') return a.tsMasAntiguo - b.tsMasAntiguo;
+              if (filtroStock.orden === 'recientes') return b.tsMasReciente - a.tsMasReciente;
+              if (filtroStock.orden === 'menor_stock') return a.cantidadTotal - b.cantidadTotal;
+              if (filtroStock.orden === 'mayor_stock') return b.cantidadTotal - a.cantidadTotal;
+              return a.concepto.localeCompare(b.concepto, 'es', { numeric: true });
+          });
+      }, [stockAgrupado, filtroStock]);
 
       const [filtroStats, setFiltroStats] = useState({ tipo: 'baterias', dias: 'todos', simuladorCompra: '20' });
 
@@ -2384,13 +2438,20 @@
                       </div>
                     </form>
 
-                    {/* BUSCADOR POR LÍNEA / MODELO Y LISTA DE COMPRAS */}
+                    {/* BUSCADOR POR LÍNEA / MODELO, ORDENAMIENTO Y LISTA DE COMPRAS */}
                     <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2.5">
                       <div className="flex flex-col sm:flex-row gap-2">
                         <div className="relative flex-1">
                           <i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-500 text-xs"></i>
-                          <input type="text" placeholder="Filtrar por modelo exacto o proveedor (Ej: 13 Pro, 14 Pro Max, Batería...)" value={filtroStock.busqueda} onChange={e => setFiltroStock({...filtroStock, busqueda: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-white text-xs focus:outline-none focus:border-amber-500" />
+                          <input type="text" placeholder="Filtrar por modelo, proveedor o fecha (Ej: 13 Pro, 14 Pro Max...)" value={filtroStock.busqueda} onChange={e => setFiltroStock({...filtroStock, busqueda: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-white text-xs focus:outline-none focus:border-amber-500" />
                         </div>
+                        <select value={filtroStock.orden || 'modelo_az'} onChange={e => setFiltroStock({...filtroStock, orden: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs font-bold focus:outline-none focus:border-amber-500">
+                          <option value="modelo_az">Ordenar: Por Modelo (A-Z)</option>
+                          <option value="antiguos">Ordenar: Más antiguos primero</option>
+                          <option value="recientes">Ordenar: Más recientes primero</option>
+                          <option value="menor_stock">Ordenar: Menor stock primero</option>
+                          <option value="mayor_stock">Ordenar: Mayor stock primero</option>
+                        </select>
                         <button type="button" onClick={() => setFiltroStock({...filtroStock, soloCritico: !filtroStock.soloCritico})} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shrink-0 ${filtroStock.soloCritico ? 'bg-rose-600 text-white' : 'bg-rose-950/60 text-rose-400 border border-rose-800/60 hover:bg-rose-900/60'}`}>
                           <i className="fa-solid fa-cart-plus mr-1.5"></i>Lista de Compras ({stockCriticoCount})
                         </button>
@@ -2411,45 +2472,84 @@
                     <div className="space-y-2.5 pt-1">
                       {stockFiltrado.length === 0 ? (
                         <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">
-                          {filtroStock.soloCritico ? '¡Excelente! No tenés repuestos en stock crítico.' : 'No hay repuestos que coincidan con ese filtro.'}
+                          {filtroStock.soloCritico ? '¡Excelente! No tenés modelos en stock crítico.' : 'No hay repuestos que coincidan con ese filtro.'}
                         </p>
-                      ) : stockFiltrado.map(item => {
-                        const cant = parseInt(item.cantidad);
-                        const esAgotado = cant === 0;
-                        const esBajo = cant === 1;
+                      ) : stockFiltrado.map(grupo => {
+                        const cantTotal = grupo.cantidadTotal;
+                        const esAgotado = cantTotal === 0;
+                        const esBajo = cantTotal === 1;
+                        const loteParaRestar = grupo.lotes.find(l => parseInt(l.cantidad) > 0) || grupo.lotes[0];
+                        const loteParaSumar = grupo.lotes[grupo.lotes.length - 1];
+                        const abierto = desgloseStockKey === grupo.key;
+
                         return (
-                        <div key={item.id} className={`bg-slate-950 border rounded-xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 transition ${esAgotado ? 'border-rose-500/70' : esBajo ? 'border-rose-500/40' : 'border-slate-800'}`}>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-bold text-white text-sm">{item.concepto}</p>
-                              <span className="bg-slate-900 border border-amber-500/30 text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold">
-                                <i className="fa-solid fa-truck-field mr-1"></i>{item.proveedor || 'Sin proveedor'}
-                              </span>
-                              {esAgotado && <span className="bg-rose-600 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase animate-pulse">SIN STOCK</span>}
-                              {esBajo && <span className="bg-rose-950 border border-rose-700 text-rose-400 px-2 py-0.5 rounded text-[10px] font-black uppercase">STOCK BAJO</span>}
+                        <div key={grupo.key} className={`bg-slate-950 border rounded-xl p-3.5 space-y-3 transition ${esAgotado ? 'border-rose-500/70' : esBajo ? 'border-rose-500/40' : 'border-slate-800'}`}>
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-black text-white text-sm sm:text-base">{grupo.concepto}</p>
+                                <span className="bg-slate-900 border border-slate-700 text-slate-300 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  {grupo.lotes.length} {grupo.lotes.length === 1 ? 'ingreso' : 'ingresos / lotes'}
+                                </span>
+                                {esAgotado && <span className="bg-rose-600 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase animate-pulse">SIN STOCK</span>}
+                                {esBajo && <span className="bg-rose-950 border border-rose-700 text-rose-400 px-2 py-0.5 rounded text-[10px] font-black uppercase">STOCK BAJO</span>}
+                              </div>
+                              <p className="text-[11px] text-amber-400/90 mt-0.5">
+                                <i className="fa-solid fa-truck-field mr-1"></i>Proveedores: {grupo.proveedoresList.join(' • ') || 'Sin especificar'}
+                              </p>
                             </div>
-                            {!modoPrivado && <p className="text-[10px] text-slate-500 font-mono mt-0.5">Costo Base: {item.monto} {item.moneda} (Eq: {formatDinero(convertirParaMostrar(item.monto, item.moneda))} c/u)</p>}
+
+                            <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-2.5">
+                              <button type="button" onClick={() => setDesgloseStockKey(abierto ? null : grupo.key)} className="bg-slate-900 hover:bg-slate-800 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-lg text-xs font-bold transition">
+                                <i className={`fa-solid ${abierto ? 'fa-chevron-up' : 'fa-layer-group'} mr-1.5`}></i>
+                                {abierto ? 'Ocultar lotes' : `Ver lotes (${grupo.lotes.length})`}
+                              </button>
+
+                              <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden shrink-0" title="Descuenta del lote más antiguo / Suma al más reciente">
+                                <button onClick={() => modificarCantidadStock(loteParaRestar.id, -1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-minus text-[10px]"></i></button>
+                                <span className={`px-3 py-1 font-mono font-black border-x border-slate-700 bg-slate-950 text-xs min-w-[38px] text-center ${cantTotal <= 1 ? 'text-rose-400' : 'text-amber-400'}`}>{cantTotal}</span>
+                                <button onClick={() => modificarCantidadStock(loteParaSumar.id, 1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-3">
-                            <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden shrink-0">
-                              <button onClick={() => modificarCantidadStock(item.id, -1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-minus text-[10px]"></i></button>
-                              <span className={`px-3 py-1 font-mono font-black border-x border-slate-700 bg-slate-950 text-xs min-w-[36px] text-center ${cant <= 1 ? 'text-rose-400' : 'text-amber-400'}`}>{item.cantidad}</span>
-                              <button onClick={() => modificarCantidadStock(item.id, 1)} className="px-2.5 py-1 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-plus text-[10px]"></i></button>
+
+                          {abierto && (
+                            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2 fade-in">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">
+                                <i className="fa-solid fa-boxes-packing text-amber-400 mr-1.5"></i>Desglose de ingresos por proveedor y fecha
+                              </p>
+                              <div className="space-y-1.5">
+                                {grupo.lotes.map(lote => (
+                                  <div key={lote.id} className="bg-slate-950 border border-slate-800/80 rounded-lg p-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs">
+                                    <div>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-bold text-amber-400"><i className="fa-solid fa-truck-field mr-1"></i>{lote.proveedor || 'Sin proveedor'}</span>
+                                        <span className="bg-slate-900 border border-slate-800 text-slate-400 px-2 py-0.5 rounded text-[10px] font-mono">Ingreso: {lote.fechaLote}</span>
+                                      </div>
+                                      {!modoPrivado && <p className="text-[10px] text-slate-500 font-mono mt-0.5">Costo: {lote.monto} {lote.moneda} (Eq: {formatDinero(convertirParaMostrar(lote.monto, lote.moneda))} c/u)</p>}
+                                    </div>
+                                    <div className="flex items-center gap-2 self-end sm:self-center">
+                                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+                                        <button onClick={() => modificarCantidadStock(lote.id, -1)} className="px-2 py-0.5 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-minus text-[9px]"></i></button>
+                                        <span className="px-2.5 py-0.5 font-mono font-bold text-white border-x border-slate-700 bg-slate-950 text-xs">{lote.cantidad}</span>
+                                        <button onClick={() => modificarCantidadStock(lote.id, 1)} className="px-2 py-0.5 hover:bg-slate-800 text-slate-300 font-bold"><i className="fa-solid fa-plus text-[9px]"></i></button>
+                                      </div>
+                                      <button onClick={() => setEditandoStock({...lote, proveedor: lote.proveedor || ''})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-pen"></i></button>
+                                      <button onClick={() => {
+                                          if (window.confirm(`¿Eliminar este lote de "${lote.concepto}" (${lote.proveedor})?`)) {
+                                              const log = generarLog('Eliminó Lote de Stock', `Eliminó lote de "${lote.concepto}" (${lote.proveedor}).`, lote);
+                                              guardarEnNube({...db, stock: db.stock.filter(x => x.id !== lote.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+                                          }
+                                      }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-trash"></i></button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <button onClick={() => setEditandoStock({...item, proveedor: item.proveedor || ''})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
-                              <button onClick={() => {
-                                  const log = generarLog('Eliminó Repuesto', `Eliminó "${item.concepto}" del sistema.`, item);
-                                  guardarEnNube({...db, stock: db.stock.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
-                              }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-7 h-7 rounded-lg text-xs"><i className="fa-solid fa-trash"></i></button>
-                            </div>
-                          </div>
+                          )}
                         </div>
                       )})}
                     </div>
-                  </div>
-                </div>
-              )}
 
               {/* VISTA NUEVA: ESTADÍSTICAS DE CONSUMO Y COMPRA DE BATERÍAS */}
               {vista === 'estadisticas' && (
