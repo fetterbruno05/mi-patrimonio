@@ -1053,7 +1053,15 @@
               const key = nombrePieza.toLowerCase();
 
               if (!mapa[key]) {
-                  mapa[key] = { nombre: nombrePieza, total: 0, cliente: 0, gremio: 0 };
+                  const grupoStock = stockAgrupado.find(g => g.key === key);
+                  mapa[key] = {
+                      nombre: nombrePieza,
+                      key,
+                      total: 0,
+                      cliente: 0,
+                      gremio: 0,
+                      stockActual: grupoStock ? grupoStock.cantidadTotal : 0
+                  };
               }
               mapa[key].total += 1;
               totalUnidades += 1;
@@ -1067,11 +1075,24 @@
               }
           });
 
+          const listaBase = Object.values(mapa).sort((a, b) => b.total - a.total);
+          const totalStockAnalizado = listaBase.reduce((acc, it) => acc + it.stockActual, 0);
           const lote = Math.max(0, parseInt(filtroStats.simuladorCompra) || 0);
-          const items = Object.values(mapa).sort((a, b) => b.total - a.total).map(it => {
+          const stockFuturoTotal = totalStockAnalizado + lote;
+
+          // Calculamos el stock ideal (Stock Actual + Pedido) según el % de rotación y restamos lo que ya hay en stock
+          const preCalculo = listaBase.map(it => {
               const porcentaje = totalUnidades > 0 ? (it.total / totalUnidades) * 100 : 0;
-              const sugerenciaCompra = Math.round((porcentaje / 100) * lote);
-              return { ...it, porcentaje, sugerenciaCompra };
+              const stockIdeal = (porcentaje / 100) * stockFuturoTotal;
+              const faltanteBruto = Math.max(0, stockIdeal - it.stockActual);
+              return { ...it, porcentaje, stockIdeal, faltanteBruto };
+          });
+
+          const sumaFaltantes = preCalculo.reduce((acc, it) => acc + it.faltanteBruto, 0);
+
+          const items = preCalculo.map(it => {
+              const sugerenciaCompra = sumaFaltantes > 0 ? Math.round((it.faltanteBruto / sumaFaltantes) * lote) : 0;
+              return { ...it, sugerenciaCompra };
           });
 
           return {
@@ -1079,10 +1100,11 @@
               totalUnidades,
               totalCliente,
               totalGremio,
+              totalStockAnalizado,
               porcentajeCliente: totalUnidades > 0 ? (totalCliente / totalUnidades) * 100 : 0,
               porcentajeGremio: totalUnidades > 0 ? (totalGremio / totalUnidades) * 100 : 0
           };
-      }, [db.reparacionesFin, filtroStats]);
+      }, [db.reparacionesFin, filtroStats, stockAgrupado]);
 
       // CÁLCULOS GLOBALES
       const tBillUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -2636,11 +2658,16 @@
                       </div>
                     </div>
 
-                    {/* RANKING POR MODELO CON PORCENTAJE Y COMPRA SUGERIDA */}
+                    {/* RANKING POR MODELO CON PORCENTAJE, STOCK ACTUAL Y COMPRA SUGERIDA */}
                     <div className="pt-2 space-y-3">
-                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2">
-                        <i className="fa-solid fa-ranking-star text-purple-400 mr-1.5"></i>Porcentaje de Rotación por Modelo y Compra Sugerida
-                      </h3>
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1 border-b border-slate-800 pb-2">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          <i className="fa-solid fa-ranking-star text-purple-400 mr-1.5"></i>Rotación vs. Stock Actual y Compra Inteligente
+                        </h3>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          En stock hoy: <strong className="text-amber-400">{estadisticasConsumo.totalStockAnalizado}</strong> + Pedido: <strong className="text-purple-400">{filtroStats.simuladorCompra || 0}</strong> = <strong className="text-white">{estadisticasConsumo.totalStockAnalizado + (parseInt(filtroStats.simuladorCompra) || 0)} unid. totales</strong>
+                        </span>
+                      </div>
 
                       {estadisticasConsumo.items.length === 0 ? (
                         <p className="text-center text-slate-500 py-6 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">
@@ -2656,19 +2683,27 @@
                                     <span className="bg-slate-800 text-slate-300 font-mono font-black px-2 py-0.5 rounded text-[10px]">#{i + 1}</span>
                                     <h4 className="font-black text-white text-sm">{item.nombre}</h4>
                                     <span className="bg-purple-950 border border-purple-700 text-purple-300 px-2 py-0.5 rounded text-[10px] font-black">
-                                      {item.porcentaje.toFixed(1)}% del total
+                                      {item.porcentaje.toFixed(1)}% de rotación
+                                    </span>
+                                    <span className="bg-slate-900 border border-amber-500/40 text-amber-400 px-2 py-0.5 rounded text-[10px] font-mono font-bold">
+                                      En Stock hoy: {item.stockActual} unid.
                                     </span>
                                   </div>
-                                  <div className="flex items-center gap-3 mt-1 text-[11px]">
-                                    <span className="text-slate-300 font-bold">Total colocadas: <strong className="text-white">{item.total}</strong></span>
+                                  <div className="flex items-center gap-3 mt-1 text-[11px] flex-wrap">
+                                    <span className="text-slate-300 font-bold">Colocadas: <strong className="text-white">{item.total}</strong></span>
                                     <span className="text-cyan-400"><i className="fa-solid fa-user mr-1"></i>Cliente: <strong>{item.cliente}</strong></span>
                                     <span className="text-amber-400"><i className="fa-solid fa-building mr-1"></i>Gremio: <strong>{item.gremio}</strong></span>
+                                    <span className="text-slate-500 font-mono text-[10px]">• Stock ideal tras compra: <strong>{Math.round(item.stockIdeal)} unid.</strong></span>
                                   </div>
                                 </div>
 
-                                <div className="bg-slate-900 border border-purple-500/30 rounded-lg px-3 py-1.5 text-right shrink-0 w-full sm:w-auto flex sm:block justify-between items-center">
-                                  <span className="text-[9px] text-purple-300 font-bold uppercase block">Sugerido p/ lote de {filtroStats.simuladorCompra || 0}:</span>
-                                  <span className="font-mono font-black text-emerald-400 text-sm">Comprar {item.sugerenciaCompra} unid.</span>
+                                <div className={`bg-slate-900 border rounded-lg px-3 py-1.5 text-right shrink-0 w-full sm:w-auto flex sm:block justify-between items-center ${item.sugerenciaCompra > 0 ? 'border-emerald-500/40' : 'border-slate-800'}`}>
+                                  <span className="text-[9px] text-slate-400 font-bold uppercase block">Sugerido p/ equilibrar stock:</span>
+                                  {item.sugerenciaCompra > 0 ? (
+                                    <span className="font-mono font-black text-emerald-400 text-sm">Comprar {item.sugerenciaCompra} unid.</span>
+                                  ) : (
+                                    <span className="font-mono font-bold text-slate-500 text-xs">Stock cubierto (0 unid.)</span>
+                                  )}
                                 </div>
                               </div>
 
