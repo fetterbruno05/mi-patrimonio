@@ -102,6 +102,7 @@
       cobrar: 'Cuentas a Cobrar',
       deudas: 'Deudas a Otros',
       stock: 'Stock Repuestos',
+      estadisticas: 'Estadísticas de Consumo y Compra',
       actividad: 'Auditoría (Logs)'
     };
 
@@ -933,6 +934,59 @@
           });
       }, [db.stock, filtroStock]);
 
+      const [filtroStats, setFiltroStats] = useState({ tipo: 'baterias', dias: 'todos', simuladorCompra: '20' });
+
+      const estadisticasConsumo = useMemo(() => {
+          const mapa = {};
+          let totalUnidades = 0;
+          let totalCliente = 0;
+          let totalGremio = 0;
+          const ahora = Date.now();
+          const limiteTs = filtroStats.dias === 'todos' ? 0 : ahora - (parseInt(filtroStats.dias) * 24 * 60 * 60 * 1000);
+
+          (db.reparacionesFin || []).forEach(rep => {
+              if (limiteTs > 0 && rep.fechaTimestamp < limiteTs) return;
+              const eq = rep.equipoOriginal || {};
+              const esBat = esTextoBateria(rep.repuestoUsado) || esTextoBateria(eq.falla);
+
+              if (filtroStats.tipo === 'baterias' && !esBat) return;
+              if (filtroStats.tipo === 'todos' && !rep.repuestoUsado && !esBat) return;
+
+              const nombrePieza = rep.repuestoUsado ? rep.repuestoUsado.trim() : `Batería ${eq.modelo || 'Sin modelo'}`;
+              const key = nombrePieza.toLowerCase();
+
+              if (!mapa[key]) {
+                  mapa[key] = { nombre: nombrePieza, total: 0, cliente: 0, gremio: 0 };
+              }
+              mapa[key].total += 1;
+              totalUnidades += 1;
+
+              if (eq.origen === 'gremio') {
+                  mapa[key].gremio += 1;
+                  totalGremio += 1;
+              } else {
+                  mapa[key].cliente += 1;
+                  totalCliente += 1;
+              }
+          });
+
+          const lote = Math.max(0, parseInt(filtroStats.simuladorCompra) || 0);
+          const items = Object.values(mapa).sort((a, b) => b.total - a.total).map(it => {
+              const porcentaje = totalUnidades > 0 ? (it.total / totalUnidades) * 100 : 0;
+              const sugerenciaCompra = Math.round((porcentaje / 100) * lote);
+              return { ...it, porcentaje, sugerenciaCompra };
+          });
+
+          return {
+              items,
+              totalUnidades,
+              totalCliente,
+              totalGremio,
+              porcentajeCliente: totalUnidades > 0 ? (totalCliente / totalUnidades) * 100 : 0,
+              porcentajeGremio: totalUnidades > 0 ? (totalGremio / totalUnidades) * 100 : 0
+          };
+      }, [db.reparacionesFin, filtroStats]);
+
       // CÁLCULOS GLOBALES
       const tBillUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tActFisUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -1071,15 +1125,16 @@
               </div>
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-1">
+                <button onClick={() => {setVista('cobrar'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'cobrar' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-hand-holding-dollar w-4 text-center"></i> Cuentas a Cobrar</button>
+                <button onClick={() => {setVista('deudas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'deudas' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-handshake w-4 text-center"></i> Deudas a Otros</button>
+              </div>
+
+              <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-1">
                 <button onClick={() => {setVista('stock'); setMenuAbierto(false);}} className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'stock' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                   <span className="flex items-center gap-2.5"><i className="fa-solid fa-boxes-stacked w-4 text-center"></i> Stock Repuestos</span>
                   {stockCriticoCount > 0 && <span className="bg-rose-600 text-white font-black px-1.5 py-0.2 rounded-full text-[10px]">{stockCriticoCount}</span>}
                 </button>
-                <button onClick={() => {setVista('actividad'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-shield-halved w-4 text-center text-indigo-400"></i> Auditoría (Logs)</button>
-              </div>
-
-              <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-1">
-                <button onClick={() => {setVista('stock'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'stock' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-boxes-stacked w-4 text-center"></i> Stock Repuestos</button>
+                <button onClick={() => {setVista('estadisticas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'estadisticas' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-chart-Simple w-4 text-center"></i> Estadísticas Baterías</button>
                 <button onClick={() => {setVista('actividad'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-shield-halved w-4 text-center text-indigo-400"></i> Auditoría (Logs)</button>
               </div>
             </nav>
@@ -2344,6 +2399,108 @@
                           </div>
                         </div>
                       )})}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* VISTA NUEVA: ESTADÍSTICAS DE CONSUMO Y COMPRA DE BATERÍAS */}
+              {vista === 'estadisticas' && (
+                <div className="max-w-5xl mx-auto space-y-5 fade-in">
+                  
+                  {/* TARJETAS DE VOLUMEN Y PROPORCIÓN MINORISTA VS MAYORISTA */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-gradient-to-br from-purple-900/40 to-slate-900 border border-purple-500/30 rounded-2xl p-4 shadow-lg text-center">
+                      <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-battery-full mr-1.5"></i>Total Consumido</p>
+                      <h2 className="text-2xl sm:text-3xl font-black text-white">{estadisticasConsumo.totalUnidades} <span className="text-xs font-normal text-slate-400">unid.</span></h2>
+                      <p className="text-[10px] text-slate-400 mt-1">Según reparaciones finalizadas</p>
+                    </div>
+                    <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 shadow-lg text-center">
+                      <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-user mr-1.5"></i>Clientes Particulares (Minorista)</p>
+                      <h2 className="text-2xl sm:text-3xl font-black text-cyan-400">{estadisticasConsumo.totalCliente} <span className="text-sm font-bold text-slate-300">({estadisticasConsumo.porcentajeCliente.toFixed(1)}%)</span></h2>
+                      <p className="text-[10px] text-slate-500 mt-1">Reparaciones 50/50 en local</p>
+                    </div>
+                    <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4 shadow-lg text-center">
+                      <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-building mr-1.5"></i>Gremio / Mayorista</p>
+                      <h2 className="text-2xl sm:text-3xl font-black text-amber-400">{estadisticasConsumo.totalGremio} <span className="text-sm font-bold text-slate-300">({estadisticasConsumo.porcentajeGremio.toFixed(1)}%)</span></h2>
+                      <p className="text-[10px] text-slate-500 mt-1">Equipos de terceros / gremio</p>
+                    </div>
+                  </div>
+
+                  {/* CONTROLES Y SIMULADOR INTELIGENTE DE COMPRA */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Qué analizar</label>
+                        <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex">
+                          <button type="button" onClick={() => setFiltroStats({...filtroStats, tipo: 'baterias'})} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${filtroStats.tipo === 'baterias' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>Solo Baterías</button>
+                          <button type="button" onClick={() => setFiltroStats({...filtroStats, tipo: 'todos'})} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${filtroStats.tipo === 'todos' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>Todos los Repuestos</button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Período de tiempo</label>
+                        <select value={filtroStats.dias} onChange={e => setFiltroStats({...filtroStats, dias: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-purple-500">
+                          <option value="todos">Histórico Completo (Más preciso)</option>
+                          <option value="30">Últimos 30 días</option>
+                          <option value="90">Últimos 3 meses (90 días)</option>
+                          <option value="180">Últimos 6 meses (180 días)</option>
+                        </select>
+                      </div>
+
+                      <div className="bg-purple-950/30 border border-purple-500/40 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                        <div>
+                          <label className="text-[9px] font-black text-purple-300 uppercase block">Simulador de Pedido</label>
+                          <span className="text-[10px] text-slate-400">¿Cuántas vas a comprar en total?</span>
+                        </div>
+                        <input type="number" min="1" value={filtroStats.simuladorCompra} onChange={e => setFiltroStats({...filtroStats, simuladorCompra: e.target.value})} className="w-16 bg-slate-950 border border-purple-500 rounded-lg px-2 py-1 text-center font-mono font-black text-white text-sm focus:outline-none" />
+                      </div>
+                    </div>
+
+                    {/* RANKING POR MODELO CON PORCENTAJE Y COMPRA SUGERIDA */}
+                    <div className="pt-2 space-y-3">
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2">
+                        <i className="fa-solid fa-ranking-star text-purple-400 mr-1.5"></i>Porcentaje de Rotación por Modelo y Compra Sugerida
+                      </h3>
+
+                      {estadisticasConsumo.items.length === 0 ? (
+                        <p className="text-center text-slate-500 py-6 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">
+                          Todavía no hay reparaciones finalizadas con baterías/repuestos en este período.
+                        </p>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {estadisticasConsumo.items.map((item, i) => (
+                            <div key={item.nombre} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2 hover:border-slate-700 transition">
+                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="bg-slate-800 text-slate-300 font-mono font-black px-2 py-0.5 rounded text-[10px]">#{i + 1}</span>
+                                    <h4 className="font-black text-white text-sm">{item.nombre}</h4>
+                                    <span className="bg-purple-950 border border-purple-700 text-purple-300 px-2 py-0.5 rounded text-[10px] font-black">
+                                      {item.porcentaje.toFixed(1)}% del total
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3 mt-1 text-[11px]">
+                                    <span className="text-slate-300 font-bold">Total colocadas: <strong className="text-white">{item.total}</strong></span>
+                                    <span className="text-cyan-400"><i className="fa-solid fa-user mr-1"></i>Cliente: <strong>{item.cliente}</strong></span>
+                                    <span className="text-amber-400"><i className="fa-solid fa-building mr-1"></i>Gremio: <strong>{item.gremio}</strong></span>
+                                  </div>
+                                </div>
+
+                                <div className="bg-slate-900 border border-purple-500/30 rounded-lg px-3 py-1.5 text-right shrink-0 w-full sm:w-auto flex sm:block justify-between items-center">
+                                  <span className="text-[9px] text-purple-300 font-bold uppercase block">Sugerido p/ lote de {filtroStats.simuladorCompra || 0}:</span>
+                                  <span className="font-mono font-black text-emerald-400 text-sm">Comprar {item.sugerenciaCompra} unid.</span>
+                                </div>
+                              </div>
+
+                              {/* Barra de proporción visual */}
+                              <div className="w-full bg-slate-900 rounded-full h-2 border border-slate-800 overflow-hidden flex">
+                                <div className={`h-full ${COLORES_GRAFICO[i % COLORES_GRAFICO.length]}`} style={{width: `${item.porcentaje}%`}}></div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
