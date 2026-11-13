@@ -151,6 +151,7 @@
       const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
       const [pagoDeudaActivo, setPagoDeudaActivo] = useState({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
       const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' }); 
+      const [desgloseCobrarId, setDesgloseCobrarId] = useState(null); 
       
       const [editandoActivo, setEditandoActivo] = useState(null);
       const [editandoFijo, setEditandoFijo] = useState(null);
@@ -492,13 +493,15 @@
         const montoUSD = aUSDBase(montoPrestado, nuevaDeudaCobrar.moneda, db.cotizacionDolar);
         let deudasAc = [...(db.deudasCobrar || [])];
         const idx = deudasAc.findIndex(d => d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() && d.motivo.trim().toLowerCase() === nuevaDeudaCobrar.motivo.trim().toLowerCase());
+        const nvoMov = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Préstamo manual`, detalle: `Original: ${montoPrestado} ${nuevaDeudaCobrar.moneda}`, montoUSD: montoUSD, tipo: 'cargo' };
 
         let log;
         if (idx !== -1) {
           deudasAc[idx].monto = (parseFloat(deudasAc[idx].monto) + montoUSD).toFixed(4);
+          deudasAc[idx].movimientos = [nvoMov, ...(deudasAc[idx].movimientos || [])];
           log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} a "${deudasAc[idx].deudor}".`, deudasAc[idx]);
         } else {
-          const item = { id: Date.now(), fechaTimestamp: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), motivo: nuevaDeudaCobrar.motivo.trim(), monto: montoUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString() };
+          const item = { id: Date.now(), fechaTimestamp: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), motivo: nuevaDeudaCobrar.motivo.trim(), monto: montoUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString(), movimientos: [nvoMov] };
           deudasAc.unshift(item);
           log = generarLog('Creó Cuenta a Cobrar', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} a "${item.deudor}".`, item);
         }
@@ -514,12 +517,14 @@
         if (redondear(abonoBaseUSD) > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar de más.');
 
         const activosAc = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroFisico, cobroDeudaActivo.monedaCobro, db.activos);
+        const wUsada = activosAc.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
         const nvoMonto = parseFloat(itemDeuda.monto) - abonoBaseUSD;
+        const movAbono = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Pago recibido (a ${wUsada})`, detalle: `Entregó: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`, montoUSD: abonoBaseUSD, tipo: 'abono' };
+
         let deudasAc = [];
         if (nvoMonto <= 0.05) deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
-        else deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nvoMonto.toFixed(4) } : d);
+        else deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nvoMonto.toFixed(4), movimientos: [movAbono, ...(d.movimientos || [])] } : d);
 
-        const wUsada = activosAc.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
         const log = generarLog('Registró Cobro', `Recibió ${cobroFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Entró a ${wUsada}.`);
         guardarEnNube({ ...db, activos: activosAc, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' });
@@ -592,11 +597,13 @@
           let deudasCobrarAc = [...(db.deudasCobrar || [])];
           const deudor = "Local / Negocio (Ventas)";
           const motivo = "Comisiones de Venta de Equipos";
+          const movVenta = { id: Date.now() + 2, fecha: fechaHoy, titulo: `Venta de ${cant} ${cant === 1 ? 'equipo' : 'equipos'}`, detalle: `Comisión: ${totalComi} ${nuevaVenta.moneda}`, montoUSD: comiUSD, tipo: 'cargo' };
           const idxCobrar = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivo);
           if (idxCobrar !== -1) {
               deudasCobrarAc[idxCobrar].monto = (parseFloat(deudasCobrarAc[idxCobrar].monto) + comiUSD).toFixed(4); 
+              deudasCobrarAc[idxCobrar].movimientos = [movVenta, ...(deudasCobrarAc[idxCobrar].movimientos || [])];
           } else {
-              deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo, monto: comiUSD.toFixed(4), moneda: 'USD', fecha: fechaHoy });
+              deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo, monto: comiUSD.toFixed(4), moneda: 'USD', fecha: fechaHoy, movimientos: [movVenta] });
           }
           const log = generarLog('Registró Venta', `Vendió ${cant} equipos. Sumó ${totalComi.toFixed(2)} ${nuevaVenta.moneda} a Cuentas a Cobrar.`, regVenta);
           guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -674,9 +681,14 @@
           let log;
           if (equipo.origen === 'gremio') {
               let deudasCb = [...(db.deudasCobrar || [])];
+              const movGremio = { id: Date.now() + 2, fecha: new Date().toLocaleDateString(), titulo: `${equipo.modelo} (${equipo.falla})`, detalle: `IMEI: ${equipo.imei}${nomRep ? ` • Rep: ${nomRep}` : ''}`, montoUSD: mUSD, tipo: 'cargo' };
               const idx = deudasCb.findIndex(d => d.deudor === equipo.gremio && d.motivo === "Acumulado de Reparaciones Gremio");
-              if (idx !== -1) deudasCb[idx].monto = (parseFloat(deudasCb[idx].monto) + mUSD).toFixed(4);
-              else deudasCb.unshift({ id: Date.now()+1, fechaTimestamp: Date.now(), deudor: equipo.gremio, motivo: "Acumulado de Reparaciones Gremio", monto: mUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString() });
+              if (idx !== -1) {
+                  deudasCb[idx].monto = (parseFloat(deudasCb[idx].monto) + mUSD).toFixed(4);
+                  deudasCb[idx].movimientos = [movGremio, ...(deudasCb[idx].movimientos || [])];
+              } else {
+                  deudasCb.unshift({ id: Date.now()+1, fechaTimestamp: Date.now(), deudor: equipo.gremio, motivo: "Acumulado de Reparaciones Gremio", monto: mUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString(), movimientos: [movGremio] });
+              }
               dbUpd.deudasCobrar = deudasCb;
               log = generarLog('Finalizó Reparación Gremio', `Entregó ${equipo.modelo} (${diasG}d gtía). Sumó a Cobrar.`, regFin);
           } else {
@@ -702,11 +714,28 @@
           const prop = totU > 0 ? ((costoU + (ganNeta/2)) / totU) : 0;
           const miParteAbonoUSD = aUSD * prop;
 
+          const ratioPago = totU > 0 ? (aUSD / totU) : 0;
+          const repRecuperadoUSD = costoU * ratioPago;
+          const gna50USD = (ganNeta / 2) * ratioPago;
+          const mtNombre = panelCobroReparacion.metodoPago.trim();
+          const movTaller = {
+              id: Date.now() + 2,
+              fecha: new Date().toLocaleDateString(),
+              titulo: `${item.equipoOriginal.modelo} (${item.equipoOriginal.clienteNombre})`,
+              detalle: `Cliente pagó ${mFisico} ${panelCobroReparacion.monedaPago} en ${mtNombre} • ${item.repuestoUsado ? `Rep (${item.repuestoUsado}): ${formatDinero(convertirParaMostrar(repRecuperadoUSD, 'USD'))} + 50% Gna: ${formatDinero(convertirParaMostrar(gna50USD, 'USD'))}` : `50% Mano de Obra`}`,
+              montoUSD: miParteAbonoUSD,
+              tipo: 'cargo'
+          };
+
           let dCobrar = [...(db.deudasCobrar || [])];
           const deud = "Local / Negocio (Taller)"; const mot = "Comisiones de Reparación 50%";
           const idx = dCobrar.findIndex(d => d.deudor === deud && d.motivo === mot);
-          if (idx !== -1) dCobrar[idx].monto = (parseFloat(dCobrar[idx].monto) + miParteAbonoUSD).toFixed(4);
-          else dCobrar.unshift({ id: Date.now()+1, fechaTimestamp: Date.now(), deudor: deud, motivo: mot, monto: miParteAbonoUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString() });
+          if (idx !== -1) {
+              dCobrar[idx].monto = (parseFloat(dCobrar[idx].monto) + miParteAbonoUSD).toFixed(4);
+              dCobrar[idx].movimientos = [movTaller, ...(dCobrar[idx].movimientos || [])];
+          } else {
+              dCobrar.unshift({ id: Date.now()+1, fechaTimestamp: Date.now(), deudor: deud, motivo: mot, monto: miParteAbonoUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString(), movimientos: [movTaller] });
+          }
 
           const estadoF = redondear(nvoRestante) <= 0 ? 'cobrado' : 'pendiente';
           const repsF = (db.reparacionesFin || []).map(r => {
@@ -2113,12 +2142,41 @@
                               </div>
                             </div>
                           ) : (
-                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-2.5">
-                              <div className="flex gap-1.5">
+                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-2.5 flex-wrap gap-2">
+                              <div className="flex gap-1.5 items-center">
                                 <button onClick={() => setEditandoDeudaCobrar({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
                                 <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-trash"></i></button>
+                                <button onClick={() => setDesgloseCobrarId(desgloseCobrarId === item.id ? null : item.id)} className="bg-slate-900 hover:bg-slate-800 text-cyan-400 border border-cyan-500/30 px-2.5 py-1 rounded-lg text-xs font-bold transition">
+                                  <i className={`fa-solid ${desgloseCobrarId === item.id ? 'fa-chevron-up' : 'fa-list-ul'} mr-1.5`}></i>
+                                  {desgloseCobrarId === item.id ? 'Ocultar desglose' : `Ver desglose (${(item.movimientos || []).length})`}
+                                </button>
                               </div>
                               <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: '', monedaCobro: monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-3 py-1.5 rounded-lg text-xs font-bold transition">Cobrar / Abonar</button>
+                            </div>
+                          )}
+
+                          {desgloseCobrarId === item.id && (
+                            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2 fade-in">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">
+                                <i className="fa-solid fa-receipt text-cyan-400 mr-1.5"></i>Detalle de movimientos que componen este saldo
+                              </p>
+                              {(!item.movimientos || item.movimientos.length === 0) ? (
+                                <p className="text-xs text-slate-500 py-2 text-center">Los próximos equipos o ventas que sumes a esta cuenta aparecerán detallados acá.</p>
+                              ) : (
+                                <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                                  {item.movimientos.map((m, idxM) => (
+                                    <div key={m.id || idxM} className="bg-slate-950 border border-slate-800/80 rounded-lg p-2.5 flex justify-between items-center gap-2 text-xs">
+                                      <div className="min-w-0">
+                                        <p className="font-bold text-white truncate">{m.titulo} <span className="text-[10px] text-slate-500 font-mono ml-1">({m.fecha})</span></p>
+                                        <p className="text-[11px] text-slate-400 mt-0.5">{m.detalle}</p>
+                                      </div>
+                                      <span className={`font-mono font-black shrink-0 ${m.tipo === 'abono' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                        {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.montoUSD, 'USD', monedaVisual), monedaVisual)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
