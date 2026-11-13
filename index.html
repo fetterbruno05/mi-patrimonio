@@ -118,6 +118,7 @@
 
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
+      const [bloqueoBackup, setBloqueoBackup] = useState(false);
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
@@ -191,6 +192,8 @@
               const baseCargada = {
                 cotizacionDolar: data.payload.cotizacionDolar || 1500,
                 fechaUltimaCotizacion: data.payload.fechaUltimaCotizacion || '',
+                tsUltimaCotizacion: data.payload.tsUltimaCotizacion || 0,
+                tsUltimoBackup: data.payload.tsUltimoBackup || 0,
                 activos: Array.isArray(data.payload.activos) ? data.payload.activos.filter(Boolean) : [],
                 gastosFijos: Array.isArray(data.payload.gastosFijos) ? data.payload.gastosFijos.filter(Boolean) : [],
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
@@ -212,10 +215,15 @@
                 actividad: Array.isArray(data.payload.actividad) ? data.payload.actividad.filter(Boolean) : []
               };
               setDb(baseCargada);
-              const hoyStr = new Date().toLocaleDateString();
-              if (baseCargada.fechaUltimaCotizacion !== hoyStr) {
+              const ahoraTs = Date.now();
+              const SEIS_HORAS = 6 * 60 * 60 * 1000;
+              const SIETE_DIAS = 7 * 24 * 60 * 60 * 1000;
+              if (!baseCargada.tsUltimaCotizacion || (ahoraTs - baseCargada.tsUltimaCotizacion) >= SEIS_HORAS) {
                   setCotizacionDiariaInput(baseCargada.cotizacionDolar);
                   setBloqueoCotizacion(true);
+              }
+              if (!baseCargada.tsUltimoBackup || (ahoraTs - baseCargada.tsUltimoBackup) >= SIETE_DIAS) {
+                  setBloqueoBackup(true);
               }
             }
           } catch (err) { console.error("Iniciando de cero."); }
@@ -242,9 +250,26 @@
           e.preventDefault();
           const val = parseFloat(cotizacionDiariaInput) || 1500;
           const hoyStr = new Date().toLocaleDateString();
-          const log = generarLog('Actualizó Cotización Diaria', `Confirmó cotización a $${val}`);
-          guardarEnNube({...db, cotizacionDolar: val, fechaUltimaCotizacion: hoyStr, actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+          const log = generarLog('Actualizó Cotización (Control 6hs)', `Confirmó cotización a $${val}`);
+          guardarEnNube({...db, cotizacionDolar: val, fechaUltimaCotizacion: hoyStr, tsUltimaCotizacion: Date.now(), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
           setBloqueoCotizacion(false);
+      };
+
+      const ejecutarDescargaBackup = () => {
+          const fechaArchivo = new Date().toISOString().slice(0, 10);
+          const log = generarLog('Descargó Backup', `Generó copia de seguridad completa (${fechaArchivo}).`);
+          const nuevoEstado = { ...db, tsUltimoBackup: Date.now(), actividad: [log, ...(db.actividad || [])].slice(0, 500) };
+          const blob = new Blob([JSON.stringify(nuevoEstado, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `backup_patrimonio_bruno_${fechaArchivo}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          guardarEnNube(nuevoEstado);
+          setBloqueoBackup(false);
       };
 
       const redondear = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
@@ -1197,16 +1222,34 @@
             <div className="flex items-center justify-center altura-dinamica bg-slate-950 p-4 w-full">
               <form onSubmit={procesarBloqueoCotizacion} className="bg-slate-900 border border-indigo-500/50 rounded-2xl p-6 max-w-xs w-full space-y-5 shadow-2xl fade-in text-center">
                 <div className="space-y-1.5">
-                  <i className="fa-solid fa-calendar-day text-4xl text-emerald-400 mb-1"></i>
-                  <h1 className="text-xl font-black text-white">Nuevo Día de Trabajo</h1>
-                  <p className="text-slate-400 text-xs">Verificá o actualizá la cotización de hoy.</p>
+                  <i className="fa-solid fa-clock-rotate-left text-4xl text-emerald-400 mb-1"></i>
+                  <h1 className="text-xl font-black text-white">Control de Dólar (6 hs)</h1>
+                  <p className="text-slate-400 text-xs">Pasaron más de 6 horas. Confirmá o actualizá la cotización actual.</p>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Cotización Dólar ARS de Hoy</label>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1.5">Cotización Dólar ARS Actual</label>
                   <input type="number" step="any" required autoFocus value={cotizacionDiariaInput} onChange={e => setCotizacionDiariaInput(e.target.value)} className="w-full bg-slate-950 border border-emerald-500 rounded-xl px-4 py-3 text-center text-2xl font-black text-emerald-400 focus:outline-none focus:border-emerald-400" />
                 </div>
-                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition text-sm">Confirmar y Entrar</button>
+                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition text-sm">Confirmar por 6 horas</button>
               </form>
+            </div>
+          );
+      }
+
+      if (bloqueoBackup) {
+          const diasSinBackup = db.tsUltimoBackup ? calcularDiasPasados(db.tsUltimoBackup) : 'más de 7';
+          return (
+            <div className="flex items-center justify-center altura-dinamica bg-slate-950 p-4 w-full">
+              <div className="bg-slate-900 border border-amber-500/50 rounded-2xl p-6 max-w-xs w-full space-y-5 shadow-2xl fade-in text-center">
+                <div className="space-y-1.5">
+                  <i className="fa-solid fa-cloud-arrow-down text-4xl text-amber-400 mb-1"></i>
+                  <h1 className="text-xl font-black text-white">Backup Semanal Obligatorio</h1>
+                  <p className="text-slate-400 text-xs">Llevás <strong>{diasSinBackup} días</strong> sin descargar una copia local de tu base de datos.</p>
+                </div>
+                <button onClick={ejecutarDescargaBackup} className="w-full bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 rounded-xl transition text-sm shadow-lg">
+                  <i className="fa-solid fa-download mr-2"></i>Descargar Backup y Entrar
+                </button>
+              </div>
             </div>
           );
       }
@@ -1258,9 +1301,9 @@
               </div>
             </nav>
 
-            <div className="p-3 pb-6 md:pb-3 border-t border-slate-800 text-center shrink-0">
+            <div className="p-3 pb-6 md:pb-3 border-t border-slate-800 text-center shrink-0 space-y-2">
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Cotización Dólar</p>
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Cotización Dólar (6hs)</p>
                 {!editandoDolar ? (
                   <div className="flex items-center justify-center gap-2">
                     <span className="text-base font-black text-emerald-400">${db.cotizacionDolar}</span>
@@ -1272,12 +1315,15 @@
                     <button onClick={() => { 
                       const val = parseFloat(dolarInput) || 1500;
                       const log = generarLog('Actualizó Cotización Manual', `Cambió la cotización a $${val}`);
-                      guardarEnNube({...db, cotizacionDolar: val, actividad: [log, ...(db.actividad || [])].slice(0, 500)}); 
+                      guardarEnNube({...db, cotizacionDolar: val, fechaUltimaCotizacion: new Date().toLocaleDateString(), tsUltimaCotizacion: Date.now(), actividad: [log, ...(db.actividad || [])].slice(0, 500)}); 
                       setEditandoDolar(false); 
                     }} className="bg-emerald-600 text-white px-2 py-0.5 rounded font-bold text-xs">Ok</button>
                   </div>
                 )}
               </div>
+              <button onClick={ejecutarDescargaBackup} className="w-full bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-amber-400 border border-slate-800 rounded-xl py-1.5 px-2 text-[10px] font-bold transition flex items-center justify-center gap-1.5">
+                <i className="fa-solid fa-download text-amber-400"></i> Descargar Backup ({db.tsUltimoBackup ? `hace ${calcularDiasPasados(db.tsUltimoBackup)}d` : 'Pendiente'})
+              </button>
             </div>
           </aside>
 
