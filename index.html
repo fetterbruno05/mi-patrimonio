@@ -140,7 +140,7 @@
 
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: '90' });
+      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS', metodoPago: '' });
       const [mostrarInputMetodoLibre, setMostrarInputMetodoLibre] = useState(false);
 
@@ -721,22 +721,51 @@
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y monto.');
           const montoFin = parseFloat(nuevaReparacionFinalizada.montoCobrado);
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
-          let stockAc = db.stock || [];
-          let costoRepUSD = 0; let nomRep = null; let provRep = null;
-          if (nuevaReparacionFinalizada.repuestoId) {
-              const rep = stockAc.find(s => s.id === parseInt(nuevaReparacionFinalizada.repuestoId));
-              if (!rep || rep.cantidad < 1) return alert('Sin stock del repuesto.');
-              costoRepUSD = aUSDBase(rep.monto, rep.moneda, db.cotizacionDolar);
-              nomRep = rep.concepto;
-              provRep = rep.proveedor || 'No especificado';
-              stockAc = stockAc.map(s => s.id === rep.id ? { ...s, cantidad: s.cantidad - 1 } : s);
+          let stockAc = [...(db.stock || [])];
+          let costoRepUSD = 0;
+          let listaNombres = [];
+          let listaProveedores = [];
+          let repuestosDetalle = [];
+
+          // 1. Procesar todos los repuestos seleccionados del Stock
+          const idsStock = [...(nuevaReparacionFinalizada.repuestosStock || [])];
+          if (nuevaReparacionFinalizada.repuestoId) idsStock.push(nuevaReparacionFinalizada.repuestoId);
+
+          for (const idRaw of idsStock) {
+              const idNum = parseInt(idRaw);
+              const idxS = stockAc.findIndex(s => s.id === idNum);
+              if (idxS === -1 || parseInt(stockAc[idxS].cantidad) < 1) {
+                  return alert(`Sin stock suficiente del repuesto seleccionado.`);
+              }
+              const rep = stockAc[idxS];
+              const cUSD = aUSDBase(rep.monto, rep.moneda, db.cotizacionDolar);
+              costoRepUSD += cUSD;
+              listaNombres.push(rep.concepto);
+              listaProveedores.push(rep.proveedor || 'S/P');
+              repuestosDetalle.push({ concepto: rep.concepto, proveedor: rep.proveedor || 'S/P', costoUSD: cUSD, tipo: 'stock', stockId: rep.id });
+              stockAc[idxS] = { ...rep, cantidad: parseInt(rep.cantidad) - 1 };
           }
+
+          // 2. Procesar repuesto comprado en el acto (externo) si se cargó
+          if (nuevaReparacionFinalizada.mostrarExterno && (nuevaReparacionFinalizada.extNombre.trim() || parseFloat(nuevaReparacionFinalizada.extCosto) > 0)) {
+              const nomExt = nuevaReparacionFinalizada.extNombre.trim() || 'Repuesto externo';
+              const provExt = nuevaReparacionFinalizada.extProveedor.trim() || 'Compra en el acto';
+              const costoExtNum = parseFloat(nuevaReparacionFinalizada.extCosto) || 0;
+              const cExtUSD = aUSDBase(costoExtNum, nuevaReparacionFinalizada.extMoneda || 'ARS', db.cotizacionDolar);
+              costoRepUSD += cExtUSD;
+              listaNombres.push(`${nomExt} (En el acto)`);
+              listaProveedores.push(provExt);
+              repuestosDetalle.push({ concepto: nomExt, proveedor: provExt, costoUSD: cExtUSD, tipo: 'externo' });
+          }
+
+          const nomRep = listaNombres.length > 0 ? listaNombres.join(' + ') : null;
+          const provRep = listaProveedores.length > 0 ? [...new Set(listaProveedores)].join(' / ') : null;
           const mUSD = aUSDBase(montoFin, nuevaReparacionFinalizada.monedaCobro, db.cotizacionDolar);
           const diasG = parseInt(nuevaReparacionFinalizada.diasGarantia !== undefined ? nuevaReparacionFinalizada.diasGarantia : 90);
 
           const regFin = {
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), equipoOriginal: equipo, 
-              repuestoUsado: nomRep, repuestoProveedor: provRep, costoRepuestoUSD: costoRepUSD,
+              repuestoUsado: nomRep, repuestoProveedor: provRep, costoRepuestoUSD: costoRepUSD, repuestosDetalle,
               diasGarantia: diasG, historialGarantia: [],
               montoCobradoOriginal: montoFin, monedaCobroOriginal: nuevaReparacionFinalizada.monedaCobro,
               montoCobrado: mUSD, monedaCobro: 'USD', montoAdeudadoRestante: mUSD, 
@@ -762,7 +791,7 @@
               log = generarLog('Finalizó Reparación Cliente', `Entregó ${equipo.modelo} a ${equipo.clienteNombre} (${diasG}d gtía). Queda Pendiente.`, regFin);
           }
           guardarEnNube({ ...db, ...dbUpd, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: '90' });
+          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
       };
 
       const cobrarReparacionClienteParcial = (e, item) => {
@@ -1078,35 +1107,40 @@
           (db.reparacionesFin || []).forEach(rep => {
               if (limiteTs > 0 && rep.fechaTimestamp < limiteTs) return;
               const eq = rep.equipoOriginal || {};
-              const esBat = esTextoBateria(rep.repuestoUsado) || esTextoBateria(eq.falla);
+              const piezasUsadas = Array.isArray(rep.repuestosDetalle) && rep.repuestosDetalle.length > 0
+                  ? rep.repuestosDetalle.map(d => d.concepto)
+                  : (rep.repuestoUsado ? [rep.repuestoUsado] : (esTextoBateria(eq.falla) ? [`Batería ${eq.modelo || 'Sin modelo'}`] : []));
 
-              if (filtroStats.tipo === 'baterias' && !esBat) return;
-              if (filtroStats.tipo === 'todos' && !rep.repuestoUsado && !esBat) return;
+              piezasUsadas.forEach(piezaRaw => {
+                  const esBat = esTextoBateria(piezaRaw) || (!rep.repuestoUsado && esTextoBateria(eq.falla));
+                  if (filtroStats.tipo === 'baterias' && !esBat) return;
 
-              const nombrePieza = rep.repuestoUsado ? rep.repuestoUsado.trim() : `Batería ${eq.modelo || 'Sin modelo'}`;
-              const key = nombrePieza.toLowerCase();
+                  const nombrePieza = (piezaRaw || '').trim();
+                  if (!nombrePieza) return;
+                  const key = nombrePieza.toLowerCase();
 
-              if (!mapa[key]) {
-                  const grupoStock = stockAgrupado.find(g => g.key === key);
-                  mapa[key] = {
-                      nombre: nombrePieza,
-                      key,
-                      total: 0,
-                      cliente: 0,
-                      gremio: 0,
-                      stockActual: grupoStock ? grupoStock.cantidadTotal : 0
-                  };
-              }
-              mapa[key].total += 1;
-              totalUnidades += 1;
+                  if (!mapa[key]) {
+                      const grupoStock = stockAgrupado.find(g => g.key === key);
+                      mapa[key] = {
+                          nombre: nombrePieza,
+                          key,
+                          total: 0,
+                          cliente: 0,
+                          gremio: 0,
+                          stockActual: grupoStock ? grupoStock.cantidadTotal : 0
+                      };
+                  }
+                  mapa[key].total += 1;
+                  totalUnidades += 1;
 
-              if (eq.origen === 'gremio') {
-                  mapa[key].gremio += 1;
-                  totalGremio += 1;
-              } else {
-                  mapa[key].cliente += 1;
-                  totalCliente += 1;
-              }
+                  if (eq.origen === 'gremio') {
+                      mapa[key].gremio += 1;
+                      totalGremio += 1;
+                  } else {
+                      mapa[key].cliente += 1;
+                      totalCliente += 1;
+                  }
+              });
           });
 
           const listaBase = Object.values(mapa).sort((a, b) => b.total - a.total);
@@ -1816,66 +1850,130 @@
                     <div className="border-b border-slate-800 pb-2.5 mb-3">
                       <h3 className="text-sm font-bold text-white">Finalizar Equipo (Dar de baja del taller)</h3>
                     </div>
-                    <form onSubmit={procesarFinalizacionReparacion} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                      <div className="md:col-span-3">
-                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Equipo Listo</label>
-                          <select required value={nuevaReparacionFinalizada.idEquipoTaller} onChange={e => {
-                              const idTaller = e.target.value;
-                              if (!idTaller) return setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: '90' });
-                              const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
-                              const autoGarantia = esTextoBateria(equipo?.falla) ? '180' : '90';
-                              if (equipo && equipo.origen === 'cliente' && equipo.presupuesto) {
-                                  setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: equipo.presupuesto, monedaCobro: equipo.presupuestoMoneda || 'ARS', repuestoId: '', diasGarantia: autoGarantia });
-                              } else {
-                                  setNuevaReparacionFinalizada({ idEquipoTaller: idTaller, montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', diasGarantia: autoGarantia });
-                              }
-                          }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-cyan-500">
-                              <option value="">-- Seleccionar Equipo --</option>
-                              {(db.taller || []).map(t => <option key={t.id} value={t.id}>{t.modelo} - {t.origen === 'cliente' ? t.clienteNombre : t.gremio}</option>)}
-                          </select>
+                    <form onSubmit={procesarFinalizacionReparacion} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                        <div className="md:col-span-3">
+                            <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Equipo Listo</label>
+                            <select required value={nuevaReparacionFinalizada.idEquipoTaller} onChange={e => {
+                                const idTaller = e.target.value;
+                                if (!idTaller) return setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
+                                const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
+                                const autoGarantia = esTextoBateria(equipo?.falla) ? '180' : '90';
+                                setNuevaReparacionFinalizada({
+                                    ...nuevaReparacionFinalizada,
+                                    idEquipoTaller: idTaller,
+                                    montoCobrado: (equipo && equipo.origen === 'cliente' && equipo.presupuesto) ? equipo.presupuesto : '',
+                                    monedaCobro: (equipo && equipo.origen === 'cliente' && equipo.presupuestoMoneda) ? equipo.presupuestoMoneda : 'ARS',
+                                    diasGarantia: autoGarantia
+                                });
+                            }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-cyan-500">
+                                <option value="">-- Seleccionar Equipo --</option>
+                                {(db.taller || []).map(t => <option key={t.id} value={t.id}>{t.modelo} - {t.origen === 'cliente' ? t.clienteNombre : t.gremio}</option>)}
+                            </select>
+                        </div>
+
+                        <div className="md:col-span-3">
+                            <label className="text-[10px] text-amber-400 font-bold uppercase block mb-1">Sumar Repuesto de Stock</label>
+                            <select value="" onChange={e => {
+                                const repId = e.target.value;
+                                if (!repId) return;
+                                const repObj = (db.stock || []).find(s => s.id === parseInt(repId));
+                                if (!repObj) return;
+                                const actuales = nuevaReparacionFinalizada.repuestosStock || [];
+                                const yaElegidosDeEsteLote = actuales.filter(id => parseInt(id) === repObj.id).length;
+                                if (yaElegidosDeEsteLote >= parseInt(repObj.cantidad)) {
+                                    return alert('Ya seleccionaste todas las unidades disponibles de este lote.');
+                                }
+                                const esBat = esTextoBateria(repObj.concepto);
+                                setNuevaReparacionFinalizada({
+                                    ...nuevaReparacionFinalizada,
+                                    repuestosStock: [...actuales, repId],
+                                    diasGarantia: esBat ? '180' : nuevaReparacionFinalizada.diasGarantia
+                                });
+                            }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
+                                <option value="">+ Elegir de mi Stock (Podés sumar varios)</option>
+                                {(db.stock || []).filter(s => s.cantidad > 0).map(s => <option key={s.id} value={s.id}>{s.concepto} ({s.proveedor || 'S/P'} - Disp: {s.cantidad})</option>)}
+                            </select>
+                        </div>
+
+                        <div className="md:col-span-3">
+                            <label className="text-[10px] text-teal-400 font-bold uppercase block mb-1">Plazo de Garantía</label>
+                            <select value={nuevaReparacionFinalizada.diasGarantia} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, diasGarantia: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-teal-500">
+                                <option value="90">3 Meses (90 días - Estándar)</option>
+                                <option value="180">6 Meses (180 días - Batería)</option>
+                                <option value="30">1 Mes (30 días)</option>
+                                <option value="0">Sin Garantía</option>
+                            </select>
+                        </div>
+
+                        <div className="md:col-span-3">
+                            <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Precio Final a Cobrar</label>
+                            <div className="flex">
+                                <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-xs" />
+                                <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
+                                    const nuevaMoneda = e.target.value;
+                                    const monedaActual = nuevaReparacionFinalizada.monedaCobro;
+                                    let nuevoMonto = nuevaReparacionFinalizada.montoCobrado;
+                                    if(nuevoMonto) {
+                                        if(nuevaMoneda === 'ARS' && monedaActual === 'USD') nuevoMonto = Math.round(parseFloat(nuevoMonto) * db.cotizacionDolar);
+                                        if(nuevaMoneda === 'USD' && monedaActual === 'ARS') nuevoMonto = redondear(parseFloat(nuevoMonto) / db.cotizacionDolar);
+                                    }
+                                    setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: nuevaMoneda, montoCobrado: nuevoMonto});
+                                }} className="bg-slate-900 border border-slate-700 rounded-r-xl px-2.5 py-2 text-white text-xs font-bold border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                            </div>
+                        </div>
                       </div>
-                      <div className="md:col-span-3">
-                          <label className="text-[10px] text-amber-400 font-bold uppercase block mb-1">Repuesto Usado (Opcional)</label>
-                          <select value={nuevaReparacionFinalizada.repuestoId || ''} onChange={e => {
-                              const repId = e.target.value;
-                              const repObj = (db.stock || []).find(s => s.id === parseInt(repId));
-                              const esBat = esTextoBateria(repObj?.concepto);
-                              setNuevaReparacionFinalizada({
-                                  ...nuevaReparacionFinalizada,
-                                  repuestoId: repId,
-                                  diasGarantia: esBat ? '180' : nuevaReparacionFinalizada.diasGarantia
-                              });
-                          }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
-                              <option value="">-- Ninguno --</option>
-                              {(db.stock || []).filter(s => s.cantidad > 0).map(s => <option key={s.id} value={s.id}>{s.concepto} ({s.proveedor || 'S/P'} - Disp: {s.cantidad})</option>)}
-                          </select>
+
+                      {/* ETIQUETAS DE REPUESTOS DE STOCK SELECCIONADOS Y BOTÓN DE REPUESTO EXTERNO */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {(nuevaReparacionFinalizada.repuestosStock || []).length === 0 ? (
+                            <span className="text-[11px] text-slate-500">Sin repuestos de stock seleccionados.</span>
+                          ) : (nuevaReparacionFinalizada.repuestosStock || []).map((idRep, idxR) => {
+                            const rObj = (db.stock || []).find(s => s.id === parseInt(idRep));
+                            if (!rObj) return null;
+                            return (
+                              <span key={`${idRep}-${idxR}`} className="bg-amber-950/60 border border-amber-500/40 text-amber-300 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                                <i className="fa-solid fa-microchip text-[10px]"></i>
+                                {rObj.concepto} ({rObj.proveedor || 'S/P'})
+                                <button type="button" onClick={() => {
+                                  const copia = [...(nuevaReparacionFinalizada.repuestosStock || [])];
+                                  copia.splice(idxR, 1);
+                                  setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, repuestosStock: copia});
+                                }} className="text-amber-400 hover:text-white ml-1"><i className="fa-solid fa-xmark"></i></button>
+                              </span>
+                            );
+                          })}
+                        </div>
+
+                        <button type="button" onClick={() => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, mostrarExterno: !nuevaReparacionFinalizada.mostrarExterno})} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${nuevaReparacionFinalizada.mostrarExterno ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-amber-400 border-amber-500/30 hover:bg-slate-800'}`}>
+                          <i className={`fa-solid ${nuevaReparacionFinalizada.mostrarExterno ? 'fa-minus' : 'fa-plus'} mr-1`}></i>
+                          Repuesto comprado en el acto (Externo)
+                        </button>
                       </div>
-                      <div className="md:col-span-3">
-                          <label className="text-[10px] text-teal-400 font-bold uppercase block mb-1">Plazo de Garantía</label>
-                          <select value={nuevaReparacionFinalizada.diasGarantia} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, diasGarantia: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-teal-500">
-                              <option value="90">3 Meses (90 días - Estándar)</option>
-                              <option value="180">6 Meses (180 días - Batería)</option>
-                              <option value="30">1 Mes (30 días)</option>
-                              <option value="0">Sin Garantía</option>
-                          </select>
-                      </div>
-                      <div className="md:col-span-3">
-                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Precio Final a Cobrar</label>
-                          <div className="flex">
-                              <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-xs" />
-                              <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
-                                  const nuevaMoneda = e.target.value;
-                                  const monedaActual = nuevaReparacionFinalizada.monedaCobro;
-                                  let nuevoMonto = nuevaReparacionFinalizada.montoCobrado;
-                                  if(nuevoMonto) {
-                                      if(nuevaMoneda === 'ARS' && monedaActual === 'USD') nuevoMonto = Math.round(parseFloat(nuevoMonto) * db.cotizacionDolar);
-                                      if(nuevaMoneda === 'USD' && monedaActual === 'ARS') nuevoMonto = redondear(parseFloat(nuevoMonto) / db.cotizacionDolar);
-                                  }
-                                  setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, monedaCobro: nuevaMoneda, montoCobrado: nuevoMonto});
-                              }} className="bg-slate-900 border border-slate-700 rounded-r-xl px-2.5 py-2 text-white text-xs font-bold border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+
+                      {/* PANEL DESPLEGABLE PARA REPUESTO COMPRADO EN EL ACTO */}
+                      {nuevaReparacionFinalizada.mostrarExterno && (
+                        <div className="bg-slate-900 border border-amber-500/40 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 fade-in">
+                          <div>
+                            <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">Repuesto Externo (Nombre)</label>
+                            <input type="text" placeholder="Ej: Módulo iPhone 13 / Pin de carga" value={nuevaReparacionFinalizada.extNombre} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, extNombre: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs" />
                           </div>
-                      </div>
-                      <button type="submit" className="md:col-span-12 w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl transition text-xs shadow-md">Finalizar Reparación</button>
+                          <div>
+                            <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">Costo que pagaste</label>
+                            <div className="flex">
+                              <input type="number" step="any" placeholder="Costo" value={nuevaReparacionFinalizada.extCosto} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, extCosto: e.target.value})} className="w-full min-w-0 bg-slate-950 border border-slate-700 rounded-l-lg px-2.5 py-1.5 text-white font-mono text-xs" />
+                              <select value={nuevaReparacionFinalizada.extMoneda} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, extMoneda: e.target.value})} className="bg-slate-950 border border-slate-700 border-l-0 rounded-r-lg px-2 text-white text-xs font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Proveedor (Opcional)</label>
+                            <input type="text" placeholder="Ej: Fiorito / Local vecino" value={nuevaReparacionFinalizada.extProveedor} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, extProveedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs" />
+                          </div>
+                        </div>
+                      )}
+
+                      <button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl transition text-xs shadow-md">Finalizar Reparación</button>
                     </form>
                   </div>
 
