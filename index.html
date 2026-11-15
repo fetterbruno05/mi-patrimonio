@@ -164,6 +164,7 @@
       const [editandoDeudaCobrar, setEditandoDeudaCobrar] = useState(null); 
       const [editandoStock, setEditandoStock] = useState(null);
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
+      const [editandoTaller, setEditandoTaller] = useState(null);
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       const [filtroUsuario, setFiltroUsuario] = useState('');
@@ -698,6 +699,14 @@
           guardarEnNube({ ...db, taller: [itemTaller, ...(db.taller || [])], historiaGremios, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaReparacion({ origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
           setMostrarInputGremioLibre(false);
+      };
+
+      const cambiarEstadoEquipoTaller = (idEquipo, nuevoEstado) => {
+          const eq = (db.taller || []).find(e => e.id === idEquipo);
+          if (!eq) return;
+          const tallerAc = (db.taller || []).map(e => e.id === idEquipo ? { ...e, estadoTaller: nuevoEstado } : e);
+          const log = generarLog('Cambió Estado en Taller', `${eq.modelo} pasó a "${nuevoEstado}".`);
+          guardarEnNube({ ...db, taller: tallerAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
       const eliminarEquipoTaller = (itemEquipo) => {
@@ -1741,12 +1750,27 @@
                                 const diasPasados = calcularDiasPasados(item.fechaTimestamp);
                                 const colorDias = diasPasados > 7 ? 'bg-rose-950 text-rose-400 border-rose-800' : 'bg-emerald-950 text-emerald-400 border-emerald-800';
                                 const iconoOrigen = item.origen === 'cliente' ? 'fa-user' : 'fa-building';
+                                const estActual = item.estadoTaller || 'En revisión';
+                                const colorEstado = estActual === 'Esperando repuesto' ? 'border-amber-500/50 text-amber-400 bg-amber-950/40' :
+                                                    estActual === 'Presupuesto pasado' ? 'border-purple-500/50 text-purple-300 bg-purple-950/40' :
+                                                    estActual === 'En reparación' ? 'border-cyan-500/50 text-cyan-300 bg-cyan-950/40' :
+                                                    estActual === 'Listo / A retirar' ? 'border-emerald-500/50 text-emerald-400 bg-emerald-950/40' :
+                                                    estActual === 'Sin solución' ? 'border-rose-500/50 text-rose-400 bg-rose-950/40' :
+                                                    'border-slate-700 text-slate-300 bg-slate-950';
                                 return (
                                     <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row justify-between gap-4 shadow-md hover:border-slate-700 transition">
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                                               <h4 className="text-base font-black text-white">{item.modelo}</h4>
                                               <span className="bg-slate-950 border border-slate-700 text-slate-400 px-2 py-0.5 rounded text-[10px] font-mono">IMEI: {item.imei}</span>
+                                              <select value={estActual} onChange={e => cambiarEstadoEquipoTaller(item.id, e.target.value)} className={`border rounded-lg px-2 py-0.5 text-[10px] font-bold focus:outline-none cursor-pointer ${colorEstado}`}>
+                                                <option value="En revisión" className="bg-slate-900 text-slate-200">🔍 En revisión</option>
+                                                <option value="Esperando repuesto" className="bg-slate-900 text-amber-400">⏳ Esperando repuesto</option>
+                                                <option value="Presupuesto pasado" className="bg-slate-900 text-purple-300">💬 Presupuesto pasado</option>
+                                                <option value="En reparación" className="bg-slate-900 text-cyan-300">🔧 En reparación</option>
+                                                <option value="Listo / A retirar" className="bg-slate-900 text-emerald-400">✅ Listo / A retirar</option>
+                                                <option value="Sin solución" className="bg-slate-900 text-rose-400">❌ Sin solución</option>
+                                              </select>
                                             </div>
                                             <div className="flex items-center gap-2 text-xs font-bold text-cyan-400 mb-2.5">
                                               <i className={`fa-solid ${iconoOrigen}`}></i>
@@ -1765,7 +1789,10 @@
                                         </div>
                                         <div className="flex flex-row sm:flex-col justify-between items-center sm:items-end gap-2 shrink-0">
                                             <div className={`px-2.5 py-1 rounded-lg border font-bold text-[11px] flex items-center gap-1.5 ${colorDias}`}><i className="fa-regular fa-clock"></i> {diasPasados}d</div>
-                                            <button onClick={() => eliminarEquipoTaller(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 w-8 h-8 rounded-lg transition-colors text-xs" title="Eliminar"><i className="fa-solid fa-trash"></i></button>
+                                            <div className="flex gap-1.5">
+                                              <button onClick={() => setEditandoTaller({ ...item, presupuesto: item.presupuesto || '', presupuestoMoneda: item.presupuestoMoneda || 'ARS', estadoTaller: item.estadoTaller || 'En revisión' })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white w-8 h-8 rounded-lg transition-colors text-xs" title="Editar equipo"><i className="fa-solid fa-pen"></i></button>
+                                              <button onClick={() => eliminarEquipoTaller(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 w-8 h-8 rounded-lg transition-colors text-xs" title="Eliminar"><i className="fa-solid fa-trash"></i></button>
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -2991,7 +3018,100 @@
               </form>
             </div>
           )}
+          {editandoTaller && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                if ((editandoTaller.imei || '').length !== 15) return alert('El IMEI debe tener 15 dígitos.');
+                if (editandoTaller.origen === 'cliente' && (editandoTaller.clienteTelefono || '').length !== 10) return alert('El teléfono debe tener 10 dígitos.');
+                const tallerAc = (db.taller || []).map(t => t.id === editandoTaller.id ? {
+                  ...t,
+                  modelo: editandoTaller.modelo.trim(),
+                  imei: editandoTaller.imei.trim(),
+                  clienteNombre: editandoTaller.origen === 'cliente' ? editandoTaller.clienteNombre.trim() : '',
+                  clienteTelefono: editandoTaller.origen === 'cliente' ? editandoTaller.clienteTelefono.trim() : '',
+                  gremio: editandoTaller.origen === 'gremio' ? editandoTaller.gremio.trim() : '',
+                  falla: editandoTaller.falla.trim(),
+                  estadoVisual: editandoTaller.estadoVisual.trim(),
+                  presupuesto: editandoTaller.origen === 'cliente' ? (parseFloat(editandoTaller.presupuesto) || null) : null,
+                  presupuestoMoneda: editandoTaller.presupuestoMoneda || 'ARS',
+                  estadoTaller: editandoTaller.estadoTaller || 'En revisión'
+                } : t);
+                const log = generarLog('Editó Equipo en Taller', `Actualizó datos de ${editandoTaller.modelo} (IMEI: ${editandoTaller.imei}).`, editandoTaller);
+                guardarEnNube({ ...db, taller: tallerAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+                setEditandoTaller(null);
+              }} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-md w-full space-y-3.5 shadow-2xl max-h-[90vh] overflow-y-auto">
+                <h3 className="font-black text-white text-base border-b border-slate-800 pb-2.5"><i className="fa-solid fa-pen-to-square text-cyan-400 mr-2"></i>Editar Equipo en Taller</h3>
+                <div className="space-y-2.5 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-slate-400 font-bold mb-1 block">Modelo</label>
+                      <input type="text" required value={editandoTaller.modelo} onChange={e => setEditandoTaller({...editandoTaller, modelo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 font-bold mb-1 block">IMEI (15 núm.)</label>
+                      <input type="text" maxLength="15" required value={editandoTaller.imei} onChange={e => setEditandoTaller({...editandoTaller, imei: e.target.value.replace(/\D/g, '')})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                    </div>
+                  </div>
 
+                  {editandoTaller.origen === 'cliente' ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-slate-400 font-bold mb-1 block">Nombre Cliente</label>
+                        <input type="text" required value={editandoTaller.clienteNombre} onChange={e => setEditandoTaller({...editandoTaller, clienteNombre: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 font-bold mb-1 block">Teléfono (10 núm.)</label>
+                        <input type="text" maxLength="10" required value={editandoTaller.clienteTelefono} onChange={e => setEditandoTaller({...editandoTaller, clienteTelefono: e.target.value.replace(/\D/g, '')})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-slate-400 font-bold mb-1 block">Gremio / Mayorista</label>
+                      <input type="text" required value={editandoTaller.gremio} onChange={e => setEditandoTaller({...editandoTaller, gremio: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-slate-400 font-bold mb-1 block">Falla Declarada / Trabajo a realizar</label>
+                    <input type="text" required value={editandoTaller.falla} onChange={e => setEditandoTaller({...editandoTaller, falla: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 font-bold mb-1 block">Estado Visual / Observaciones</label>
+                    <textarea rows="2" required value={editandoTaller.estadoVisual} onChange={e => setEditandoTaller({...editandoTaller, estadoVisual: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white resize-none"></textarea>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-cyan-400 font-bold mb-1 block">Estado en Taller</label>
+                      <select value={editandoTaller.estadoTaller || 'En revisión'} onChange={e => setEditandoTaller({...editandoTaller, estadoTaller: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-bold">
+                        <option value="En revisión">🔍 En revisión</option>
+                        <option value="Esperando repuesto">⏳ Esperando repuesto</option>
+                        <option value="Presupuesto pasado">💬 Presupuesto pasado</option>
+                        <option value="En reparación">🔧 En reparación</option>
+                        <option value="Listo / A retirar">✅ Listo / A retirar</option>
+                        <option value="Sin solución">❌ Sin solución</option>
+                      </select>
+                    </div>
+                    {editandoTaller.origen === 'cliente' && (
+                      <div>
+                        <label className="text-emerald-400 font-bold mb-1 block">Presupuesto</label>
+                        <div className="flex">
+                          <input type="number" step="any" placeholder="A confirmar" value={editandoTaller.presupuesto} onChange={e => setEditandoTaller({...editandoTaller, presupuesto: e.target.value})} className="w-full min-w-0 bg-slate-950 border border-slate-700 rounded-l-xl px-2.5 py-2 text-white font-mono" />
+                          <select value={editandoTaller.presupuestoMoneda} onChange={e => setEditandoTaller({...editandoTaller, presupuestoMoneda: e.target.value})} className="bg-slate-950 border border-slate-700 border-l-0 rounded-r-xl px-2 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button type="submit" className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl transition text-xs">Guardar Cambios</button>
+                  <button type="button" onClick={() => setEditandoTaller(null)} className="bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
           {editandoGastoPuntual && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={procesarEdicionGastoPuntual} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-xs w-full space-y-4 shadow-2xl">
