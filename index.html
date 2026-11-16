@@ -1301,20 +1301,34 @@
               const eq = rep.equipoOriginal || {};
               const piezasUsadas = Array.isArray(rep.repuestosDetalle) && rep.repuestosDetalle.length > 0
                   ? rep.repuestosDetalle.map(d => d.concepto)
-                  : (rep.repuestoUsado ? [rep.repuestoUsado] : (esTextoBateria(eq.falla) ? [`Batería ${eq.modelo || 'Sin modelo'}`] : []));
+                  : (rep.repuestoUsado ? rep.repuestoUsado.split(' + ') : (esTextoBateria(eq.falla) ? [`Bateria ${eq.modelo || 'Sin modelo'}`] : []));
 
               piezasUsadas.forEach(piezaRaw => {
-                  const esBat = esTextoBateria(piezaRaw) || (!rep.repuestoUsado && esTextoBateria(eq.falla));
+                  const nombreLimpio = (piezaRaw || '').trim();
+                  if (!nombreLimpio) return;
+
+                  // Es batería si lo dice el repuesto O si el motivo de la reparación fue "bateria"
+                  const esBat = esTextoBateria(nombreLimpio) || esTextoBateria(eq.falla);
                   if (filtroStats.tipo === 'baterias' && !esBat) return;
 
-                  const nombrePieza = (piezaRaw || '').trim();
-                  if (!nombrePieza) return;
-                  const key = nombrePieza.toLowerCase();
+                  // Si es una reparación histórica donde el repuesto decía solo "15 Pro" y la falla era "bateria", lo busca como "Bateria 15 Pro"
+                  const lowSinTilde = nombreLimpio.toLowerCase().replace(/batería/g, 'bateria').replace(/^iphone\s+/i, '').trim();
+                  const grupoStock = stockAgrupado.find(g => {
+                      const gKey = g.key.replace(/batería/g, 'bateria');
+                      if (gKey === lowSinTilde) return true;
+                      if (esBat && !lowSinTilde.includes('bateria')) {
+                          if (gKey === `bateria ${lowSinTilde}`) return true;
+                          if (gKey === `bateria ${lowSinTilde} base`) return true;
+                      }
+                      return false;
+                  });
+
+                  const key = grupoStock ? grupoStock.key : (esBat && !lowSinTilde.includes('bateria') ? `bateria ${lowSinTilde}` : lowSinTilde);
+                  const nombreMostrar = grupoStock ? grupoStock.concepto : (esBat && !esTextoBateria(nombreLimpio) ? `Bateria ${nombreLimpio}` : nombreLimpio);
 
                   if (!mapa[key]) {
-                      const grupoStock = stockAgrupado.find(g => g.key === key);
                       mapa[key] = {
-                          nombre: nombrePieza,
+                          nombre: nombreMostrar,
                           key,
                           total: 0,
                           cliente: 0,
@@ -1531,7 +1545,7 @@
                   <span className="flex items-center gap-2.5"><i className="fa-solid fa-boxes-stacked w-4 text-center"></i> Stock Repuestos</span>
                   {stockCriticoCount > 0 && <span className="bg-rose-600 text-white font-black px-1.5 py-0.2 rounded-full text-[10px]">{stockCriticoCount}</span>}
                 </button>
-                <button onClick={() => {setVista('estadisticas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'estadisticas' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-chart-Simple w-4 text-center"></i> Estadísticas Baterías</button>
+                <button onClick={() => {setVista('estadisticas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'estadisticas' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-chart-simple w-4 text-center"></i> Estadísticas Baterías</button>
                 <button onClick={() => {setVista('actividad'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-shield-halved w-4 text-center text-indigo-400"></i> Auditoría (Logs)</button>
               </div>
             </nav>
@@ -2900,33 +2914,41 @@
                           const descP = parseFloat(pedidoMasivo.descuentoPorc) || 0;
                           const recP = parseFloat(pedidoMasivo.recargoPorc) || 0;
                           const dProv = parseFloat(pedidoMasivo.dolarProveedor) || 0;
+                          const dSist = parseFloat(db.cotizacionDolar) || 1500;
+                          const dUsado = dProv > 0 ? dProv : dSist;
                           const fDesc = Math.max(0, 1 - (descP / 100));
                           const fRec = 1 + (recP / 100);
-                          const fNeto = fDesc * fRec;
 
                           const totalUnid = pedidoMasivo.items.reduce((acc, i) => acc + parseInt(i.cantidad), 0);
                           const subLista = pedidoMasivo.items.reduce((acc, i) => acc + (parseFloat(i.precioLista) * parseInt(i.cantidad)), 0);
                           const montoAhorrado = subLista * (1 - fDesc);
                           const subConDesc = subLista * fDesc;
-                          const montoRecargo = subConDesc * (fRec - 1);
-                          const totalFinalMonedaLista = subLista * fNeto;
-                          const totalFinalARS = pedidoMasivo.moneda === 'USD' ? Math.round(totalFinalMonedaLista * (dProv > 0 ? dProv : db.cotizacionDolar)) : Math.round(totalFinalMonedaLista);
+
+                          // Paso a paso real: (Subtotal con descuento * Dólar Proveedor) + % Recargo en ARS -> dividido Dólar Sistema
+                          const subEnARS = pedidoMasivo.moneda === 'USD' ? (subConDesc * dUsado) : subConDesc;
+                          const montoRecargoARS = subEnARS * (fRec - 1);
+                          const totalFinalARS = Math.round(subEnARS * fRec);
+                          const totalFinalSistemaUSD = pedidoMasivo.moneda === 'USD'
+                            ? redondear((subEnARS * fRec) / dSist)
+                            : Math.round(subEnARS * fRec);
 
                           return (
                             <div className="space-y-3 pt-1">
                               <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
                                 {pedidoMasivo.items.map(it => {
                                   const pLista = parseFloat(it.precioLista);
-                                  const pFinalMoneda = redondear(pLista * fNeto);
-                                  const pFinalARS = pedidoMasivo.moneda === 'USD' ? Math.round(pLista * fNeto * (dProv > 0 ? dProv : db.cotizacionDolar)) : Math.round(pLista * fNeto);
+                                  const pConDesc = pLista * fDesc;
+                                  const pEnARS = pedidoMasivo.moneda === 'USD' ? (pConDesc * dUsado * fRec) : (pConDesc * fRec);
+                                  const pFinalARS = Math.round(pEnARS);
+                                  const pFinalSistema = pedidoMasivo.moneda === 'USD' ? redondear(pEnARS / dSist) : Math.round(pEnARS);
                                   return (
                                     <div key={it.idTemp} className="bg-slate-900 border border-slate-800 rounded-xl p-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs">
                                       <div className="min-w-0">
                                         <p className="font-bold text-white">{it.concepto}</p>
                                         <p className="text-[11px] text-slate-400 font-mono">
-                                          Lista: {pLista} {pedidoMasivo.moneda} c/u (Sub: {redondear(pLista * it.cantidad)} {pedidoMasivo.moneda})
+                                          Lista: {pLista} {pedidoMasivo.moneda} {descP > 0 ? `(-${descP}% = ${redondear(pConDesc)} ${pedidoMasivo.moneda})` : ''}
                                           <span className="text-emerald-400 font-bold ml-2">
-                                            ➔ Costo Real c/u: {pFinalMoneda} {pedidoMasivo.moneda} (${pFinalARS.toLocaleString('es-AR')} ARS)
+                                            ➔ Real Sistema: {pFinalSistema} {pedidoMasivo.moneda} c/u (${pFinalARS.toLocaleString('es-AR')} ARS)
                                           </span>
                                         </p>
                                       </div>
@@ -2954,16 +2976,18 @@
                                   <span className="font-mono font-bold text-slate-300 text-xs">{redondear(subLista)} {pedidoMasivo.moneda}</span>
                                 </div>
                                 <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
-                                  <span className="text-[9px] font-bold text-emerald-400 uppercase block">Descuento ({descP || 0}%)</span>
-                                  <span className="font-mono font-bold text-emerald-400 text-xs">-{redondear(montoAhorrado)} {pedidoMasivo.moneda}</span>
+                                  <span className="text-[9px] font-bold text-emerald-400 uppercase block">Con Desc. (-{descP || 0}%)</span>
+                                  <span className="font-mono font-bold text-emerald-400 text-xs">{redondear(subConDesc)} {pedidoMasivo.moneda}</span>
+                                  <span className="text-[9px] text-slate-500 font-mono block">Ahorro: {redondear(montoAhorrado)}</span>
                                 </div>
                                 <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
-                                  <span className="text-[9px] font-bold text-rose-400 uppercase block">Recargo ({recP || 0}%)</span>
-                                  <span className="font-mono font-bold text-rose-400 text-xs">+{redondear(montoRecargo)} {pedidoMasivo.moneda}</span>
+                                  <span className="text-[9px] font-bold text-rose-400 uppercase block">Recargo (+{recP || 0}%)</span>
+                                  <span className="font-mono font-bold text-rose-400 text-xs">+${Math.round(montoRecargoARS).toLocaleString('es-AR')} ARS</span>
+                                  <span className="text-[9px] text-slate-500 font-mono block">Dólar Prov: ${dUsado}</span>
                                 </div>
                                 <div className="col-span-2 sm:col-span-1 bg-amber-950/40 p-2 rounded-lg border border-amber-500/50">
-                                  <span className="text-[9px] font-black text-amber-300 uppercase block">Total Final Real</span>
-                                  <span className="font-mono font-black text-amber-400 text-xs block">{redondear(totalFinalMonedaLista)} {pedidoMasivo.moneda}</span>
+                                  <span className="text-[9px] font-black text-amber-300 uppercase block">Costo Real (Dólar ${dSist})</span>
+                                  <span className="font-mono font-black text-amber-400 text-xs block">{totalFinalSistemaUSD} {pedidoMasivo.moneda}</span>
                                   <span className="font-mono font-bold text-white text-[10px]">$ {totalFinalARS.toLocaleString('es-AR')} ARS</span>
                                 </div>
                               </div>
