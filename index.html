@@ -135,6 +135,14 @@
       const [mostrarInputProveedorLibre, setMostrarInputProveedorLibre] = useState(false);
       const [filtroStock, setFiltroStock] = useState({ busqueda: '', soloCritico: false, orden: 'modelo_az' });
       const [desgloseStockKey, setDesgloseStockKey] = useState(null);
+      const [mostrarPedidoMasivo, setMostrarPedidoMasivo] = useState(false);
+      const [pedidoMasivo, setPedidoMasivo] = useState({
+        proveedor: '', moneda: 'USD', descuentoPorc: '', recargoPorc: '', dolarProveedor: '',
+        modalidadPago: 'billetera', walletId: '',
+        itemConcepto: '', itemCantidad: '1', itemMonto: '',
+        inputConceptoLibre: false, inputProvLibre: false,
+        items: []
+      });
 
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
@@ -670,6 +678,142 @@
         setNuevoStock({ ...nuevoStock, concepto: '', cantidad: '1', monto: '' });
         setMostrarInputStockLibre(false);
         setMostrarInputProveedorLibre(false);
+      };
+
+      const agregarItemAPedidoMasivo = () => {
+        if (!pedidoMasivo.itemConcepto.trim()) return alert('Elegí o escribí el modelo del repuesto.');
+        const cant = parseInt(pedidoMasivo.itemCantidad) || 0;
+        const precio = parseFloat(pedidoMasivo.itemMonto) || 0;
+        if (cant <= 0 || precio <= 0) return alert('Ingresá una cantidad y precio de lista válidos.');
+
+        const conceptoTrim = pedidoMasivo.itemConcepto.trim();
+        let nuevosItems = [...(pedidoMasivo.items || [])];
+        const idxExistente = nuevosItems.findIndex(i => i.concepto.toLowerCase() === conceptoTrim.toLowerCase() && parseFloat(i.precioLista) === precio);
+
+        if (idxExistente !== -1) {
+          nuevosItems[idxExistente].cantidad = parseInt(nuevosItems[idxExistente].cantidad) + cant;
+        } else {
+          nuevosItems.push({ idTemp: Date.now() + Math.random(), concepto: conceptoTrim, cantidad: cant, precioLista: precio });
+        }
+
+        setPedidoMasivo({ ...pedidoMasivo, items: nuevosItems, itemConcepto: '', itemCantidad: '1', itemMonto: '', inputConceptoLibre: false });
+      };
+
+      const cambiarCantItemPedidoMasivo = (idTemp, delta) => {
+        const nuevos = (pedidoMasivo.items || []).map(it => {
+          if (it.idTemp === idTemp) return { ...it, cantidad: Math.max(1, parseInt(it.cantidad) + delta) };
+          return it;
+        });
+        setPedidoMasivo({ ...pedidoMasivo, items: nuevos });
+      };
+
+      const quitarItemDePedidoMasivo = (idTemp) => {
+        setPedidoMasivo({ ...pedidoMasivo, items: (pedidoMasivo.items || []).filter(i => i.idTemp !== idTemp) });
+      };
+
+      const confirmarPedidoMasivoCompleto = () => {
+        if (!pedidoMasivo.proveedor.trim()) return alert('Seleccioná o escribí el proveedor del pedido.');
+        if (!pedidoMasivo.items || pedidoMasivo.items.length === 0) return alert('Sumá al menos un repuesto a la lista del pedido.');
+        const modalidad = pedidoMasivo.modalidadPago || 'billetera';
+        if (modalidad === 'billetera' && !pedidoMasivo.walletId) return alert('Seleccioná de qué billetera sale el pago del pedido.');
+
+        const proveedorTrim = pedidoMasivo.proveedor.trim();
+        const descPorc = parseFloat(pedidoMasivo.descuentoPorc) || 0;
+        const recPorc = parseFloat(pedidoMasivo.recargoPorc) || 0;
+        const cotiProv = parseFloat(pedidoMasivo.dolarProveedor) || 0;
+        const factorDesc = Math.max(0, 1 - (descPorc / 100));
+        const factorRec = 1 + (recPorc / 100);
+        const factorNeto = factorDesc * factorRec;
+        const fechaHoy = new Date().toLocaleDateString();
+
+        const subtotalLista = pedidoMasivo.items.reduce((acc, it) => acc + (parseFloat(it.precioLista) * parseInt(it.cantidad)), 0);
+        const totalUnidades = pedidoMasivo.items.reduce((acc, it) => acc + parseInt(it.cantidad), 0);
+        const totalConDescYRec = subtotalLista * factorNeto;
+
+        let monedaPagoReal = pedidoMasivo.moneda;
+        let totalPagoReal = redondear(totalConDescYRec);
+
+        if (pedidoMasivo.moneda === 'USD' && cotiProv > 0) {
+          totalPagoReal = Math.round(totalConDescYRec * cotiProv);
+          monedaPagoReal = 'ARS';
+        } else if (pedidoMasivo.moneda === 'ARS') {
+          totalPagoReal = Math.round(totalConDescYRec);
+        }
+
+        let activosAc = [...(db.activos || [])];
+        let deudasAc = [...(db.deudas || [])];
+        let notaContable = 'Solo ajuste de inventario';
+
+        if (modalidad === 'billetera') {
+          const op = procesarDescuentoSeguro(pedidoMasivo.walletId, totalPagoReal, monedaPagoReal, activosAc);
+          if (!op.success) return alert(op.msg);
+          activosAc = op.activosActualizados;
+          const nomW = activosAc.find(w => w.id === parseInt(pedidoMasivo.walletId))?.nombre || 'Billetera';
+          notaContable = `Pagado desde ${nomW} (${totalPagoReal} ${monedaPagoReal})`;
+        } else if (modalidad === 'deuda') {
+          const resumenModelos = pedidoMasivo.items.map(i => `${i.cantidad}x ${i.concepto}`).join(', ');
+          const detalleCompra = `Pedido (${totalUnidades} unid.): ${resumenModelos}${descPorc > 0 ? ` (-${descPorc}% desc.)` : ''}${recPorc > 0 ? ` (+${recPorc}% rec.)` : ''}${cotiProv > 0 ? ` (Dólar: $${cotiProv})` : ''}`;
+          const nvoMov = { id: Date.now() + 1, fecha: fechaHoy, motivo: detalleCompra, monto: totalPagoReal, moneda: monedaPagoReal, tipo: 'cargo' };
+          const idxD = deudasAc.findIndex(d => d.acreedor.trim().toLowerCase() === proveedorTrim.toLowerCase() && d.moneda === monedaPagoReal);
+          if (idxD !== -1) {
+            const movsPrev = Array.isArray(deudasAc[idxD].movimientos) && deudasAc[idxD].movimientos.length > 0
+              ? deudasAc[idxD].movimientos
+              : [{ id: deudasAc[idxD].id, fecha: deudasAc[idxD].fecha || fechaHoy, motivo: deudasAc[idxD].motivo || 'Saldo inicial', monto: parseFloat(deudasAc[idxD].monto), moneda: deudasAc[idxD].moneda, tipo: 'cargo' }];
+            deudasAc[idxD].monto = (parseFloat(deudasAc[idxD].monto) + totalPagoReal).toFixed(2);
+            deudasAc[idxD].motivo = `${movsPrev.filter(m => m.tipo === 'cargo').length + 1} compras/préstamos (Últ: Pedido ${totalUnidades} unid.)`;
+            deudasAc[idxD].movimientos = [nvoMov, ...movsPrev];
+          } else {
+            deudasAc.unshift({ id: Date.now() + 2, acreedor: proveedorTrim, motivo: detalleCompra, monto: totalPagoReal.toFixed(2), moneda: monedaPagoReal, fecha: fechaHoy, movimientos: [nvoMov] });
+          }
+          notaContable = `Sumado a Deudas con ${proveedorTrim} (${totalPagoReal} ${monedaPagoReal})`;
+        }
+
+        let stockAc = [...(db.stock || [])];
+        let nuevosNombresStock = [...(db.historiaStock || [])];
+
+        pedidoMasivo.items.forEach((it, idxItem) => {
+          const cantItem = parseInt(it.cantidad);
+          const pLista = parseFloat(it.precioLista);
+          let costoUnitReal = redondear(pLista * factorNeto);
+
+          if (pedidoMasivo.moneda === 'USD' && cotiProv > 0) {
+            const unitARS = pLista * factorNeto * cotiProv;
+            costoUnitReal = redondear(unitARS / db.cotizacionDolar);
+          } else if (pedidoMasivo.moneda === 'ARS') {
+            costoUnitReal = Math.round(pLista * factorNeto);
+          }
+
+          const idxS = stockAc.findIndex(s => 
+            s.concepto.toLowerCase().trim() === it.concepto.toLowerCase() &&
+            (s.proveedor || '').toLowerCase().trim() === proveedorTrim.toLowerCase() &&
+            parseFloat(s.monto) === costoUnitReal &&
+            s.moneda === pedidoMasivo.moneda &&
+            (s.fecha || new Date(s.id).toLocaleDateString()) === fechaHoy
+          );
+
+          if (idxS !== -1) {
+            stockAc[idxS].cantidad = parseInt(stockAc[idxS].cantidad) + cantItem;
+          } else {
+            stockAc.unshift({
+              id: Date.now() + 10 + idxItem,
+              fecha: fechaHoy,
+              concepto: it.concepto,
+              cantidad: cantItem,
+              monto: costoUnitReal,
+              moneda: pedidoMasivo.moneda,
+              proveedor: proveedorTrim
+            });
+          }
+          nuevosNombresStock.push(it.concepto);
+        });
+
+        const historiaNueva = [...new Set(nuevosNombresStock)];
+        const historiaProvNueva = [...new Set([proveedorTrim, ...(db.historiaProveedores || ['Proveedor Principal'])])];
+        const log = generarLog('Ingresó Pedido Completo', `Cargó pedido de ${totalUnidades} unid. (${pedidoMasivo.items.length} modelos) de "${proveedorTrim}". ${descPorc > 0 ? `Desc: -${descPorc}%. ` : ''}${notaContable}.`, pedidoMasivo.items);
+
+        guardarEnNube({ ...db, activos: activosAc, deudas: deudasAc, stock: stockAc, historiaStock: historiaNueva, historiaProveedores: historiaProvNueva, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setPedidoMasivo({ ...pedidoMasivo, items: [], itemConcepto: '', itemCantidad: '1', itemMonto: '' });
+        setMostrarPedidoMasivo(false);
       };
 
       const modificarCantidadStock = (id, delta) => {
@@ -2646,10 +2790,213 @@
                   </div>
 
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
-                    <div className="border-b border-slate-800 pb-2.5 flex justify-between items-center">
+                    <div className="border-b border-slate-800 pb-2.5 flex justify-between items-center flex-wrap gap-2">
                       <h3 className="text-sm font-bold text-white">Ingresar Repuestos</h3>
-                      {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} className="text-slate-500 hover:text-amber-400 bg-slate-950 px-2 py-1 rounded border border-slate-800 text-xs"><i className="fa-solid fa-eraser"></i></button>}
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => setMostrarPedidoMasivo(!mostrarPedidoMasivo)} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${mostrarPedidoMasivo ? 'bg-amber-600 text-white border-amber-500 shadow-md' : 'bg-slate-950 text-amber-400 border-amber-500/40 hover:bg-slate-800'}`}>
+                          <i className={`fa-solid ${mostrarPedidoMasivo ? 'fa-chevron-up' : 'fa-boxes-packing'}`}></i>
+                          {mostrarPedidoMasivo ? 'Ocultar Pedido Completo' : '📦 Cargar Pedido Completo (Varios Modelos + % Desc.)'}
+                        </button>
+                        {opcionesStock.length > 0 && <button onClick={limpiarHistoriaStock} className="text-slate-500 hover:text-amber-400 bg-slate-950 px-2 py-1 rounded border border-slate-800 text-xs" title="Limpiar memoria de nombres"><i className="fa-solid fa-eraser"></i></button>}
+                      </div>
                     </div>
+
+                    {/* DESPLEGABLE DE PEDIDO COMPLETO / MAYORISTA CON % DESCUENTO Y RESUMEN EN VIVO */}
+                    {mostrarPedidoMasivo && (
+                      <div className="bg-slate-950 border-2 border-amber-500/50 rounded-2xl p-4 space-y-4 shadow-xl fade-in">
+                        <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                          <div>
+                            <h4 className="text-xs font-black text-amber-400 uppercase tracking-wider"><i className="fa-solid fa-clipboard-list mr-1.5"></i>Armador de Pedido Completo / Mayorista</h4>
+                            <p className="text-[11px] text-slate-400">Cargá todos los modelos con su precio de lista: el sistema calcula el descuento y recargo batería por batería.</p>
+                          </div>
+                          {pedidoMasivo.items.length > 0 && (
+                            <button type="button" onClick={() => { if(window.confirm('¿Vaciar la lista del pedido actual?')) setPedidoMasivo({...pedidoMasivo, items: []}); }} className="text-[10px] text-rose-400 hover:underline font-bold">Vaciar lista</button>
+                          )}
+                        </div>
+
+                        {/* PASO 1: CONDICIONES GENERALES DEL PROVEEDOR */}
+                        <div className="grid grid-cols-2 sm:grid-cols-12 gap-2.5 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                          <div className="col-span-2 sm:col-span-4">
+                            <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">1. Proveedor del Pedido</label>
+                            {!pedidoMasivo.inputProvLibre ? (
+                              <select value={pedidoMasivo.proveedor} onChange={e => {
+                                if (e.target.value === 'OTRO') setPedidoMasivo({...pedidoMasivo, inputProvLibre: true, proveedor: ''});
+                                else setPedidoMasivo({...pedidoMasivo, proveedor: e.target.value});
+                              }} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">
+                                <option value="">-- Seleccionar Proveedor --</option>
+                                {opcionesProveedores.map(pr => <option key={pr} value={pr}>{pr}</option>)}
+                                <option value="OTRO" className="font-bold text-amber-400">➕ Nuevo proveedor...</option>
+                              </select>
+                            ) : (
+                              <div className="flex gap-1">
+                                <input type="text" placeholder="Nombre proveedor..." value={pedidoMasivo.proveedor} onChange={e => setPedidoMasivo({...pedidoMasivo, proveedor: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-amber-500 rounded-lg px-2.5 py-1.5 text-white text-xs" />
+                                <button type="button" onClick={() => setPedidoMasivo({...pedidoMasivo, inputProvLibre: false, proveedor: ''})} className="bg-slate-800 text-white px-2 rounded-lg text-xs">X</button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="col-span-1 sm:col-span-2">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Moneda Lista</label>
+                            <select value={pedidoMasivo.moneda} onChange={e => setPedidoMasivo({...pedidoMasivo, moneda: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-white text-xs font-bold">
+                              <option value="USD">USD</option>
+                              <option value="ARS">ARS</option>
+                            </select>
+                          </div>
+
+                          <div className="col-span-1 sm:col-span-2">
+                            <label className="text-[9px] font-bold text-emerald-400 uppercase block mb-1">% Descuento</label>
+                            <input type="number" step="any" placeholder="Ej: 10 (10%)" value={pedidoMasivo.descuentoPorc} onChange={e => setPedidoMasivo({...pedidoMasivo, descuentoPorc: e.target.value})} className="w-full bg-slate-950 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-emerald-400 font-mono font-bold text-xs" />
+                          </div>
+
+                          <div className="col-span-1 sm:col-span-2">
+                            <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">Dólar Prov. (Opc.)</label>
+                            <input type="number" step="any" disabled={pedidoMasivo.moneda === 'ARS'} placeholder={pedidoMasivo.moneda === 'ARS' ? 'N/A' : `Ej: ${db.cotizacionDolar}`} value={pedidoMasivo.dolarProveedor} onChange={e => setPedidoMasivo({...pedidoMasivo, dolarProveedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs disabled:opacity-40" />
+                          </div>
+
+                          <div className="col-span-1 sm:col-span-2">
+                            <label className="text-[9px] font-bold text-rose-400 uppercase block mb-1">% Recargo Transf.</label>
+                            <input type="number" step="any" placeholder="Ej: 2 (2%)" value={pedidoMasivo.recargoPorc} onChange={e => setPedidoMasivo({...pedidoMasivo, recargoPorc: e.target.value})} className="w-full bg-slate-950 border border-rose-500/40 rounded-lg px-2.5 py-1.5 text-rose-300 font-mono text-xs" />
+                          </div>
+                        </div>
+
+                        {/* PASO 2: AGREGAR FILAS DE REPUESTOS AL PEDIDO */}
+                        <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800/80 grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                          <div className="sm:col-span-5">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">2. Modelo / Repuesto a sumar</label>
+                            {!pedidoMasivo.inputConceptoLibre ? (
+                              <select value={pedidoMasivo.itemConcepto} onChange={e => {
+                                if (e.target.value === 'OTRO') setPedidoMasivo({...pedidoMasivo, inputConceptoLibre: true, itemConcepto: ''});
+                                else setPedidoMasivo({...pedidoMasivo, itemConcepto: e.target.value});
+                              }} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs">
+                                <option value="">-- Elegir de memoria --</option>
+                                {opcionesStock.map(op => <option key={op} value={op}>{op}</option>)}
+                                <option value="OTRO" className="font-bold text-amber-400">➕ Escribir modelo nuevo...</option>
+                              </select>
+                            ) : (
+                              <div className="flex gap-1">
+                                <input type="text" placeholder="Ej: Batería iPhone 13 Pro" value={pedidoMasivo.itemConcepto} onChange={e => setPedidoMasivo({...pedidoMasivo, itemConcepto: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-amber-500 rounded-lg px-2.5 py-1.5 text-white text-xs" />
+                                <button type="button" onClick={() => setPedidoMasivo({...pedidoMasivo, inputConceptoLibre: false, itemConcepto: ''})} className="bg-slate-800 text-white px-2 rounded-lg text-xs">X</button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Unidades</label>
+                            <input type="number" min="1" value={pedidoMasivo.itemCantidad} onChange={e => setPedidoMasivo({...pedidoMasivo, itemCantidad: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-center text-xs" />
+                          </div>
+
+                          <div className="sm:col-span-3">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Precio Lista Unit. ({pedidoMasivo.moneda})</label>
+                            <input type="number" step="any" placeholder="Precio sin desc." value={pedidoMasivo.itemMonto} onChange={e => setPedidoMasivo({...pedidoMasivo, itemMonto: e.target.value})} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregarItemAPedidoMasivo(); } }} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs" />
+                          </div>
+
+                          <button type="button" onClick={agregarItemAPedidoMasivo} className="sm:col-span-2 bg-amber-600 hover:bg-amber-500 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition h-[32px]">
+                            <i className="fa-solid fa-plus mr-1"></i> Sumar
+                          </button>
+                        </div>
+
+                        {/* PASO 3: RESUMEN EN VIVO Y PRECIO REAL BATERÍA POR BATERÍA */}
+                        {pedidoMasivo.items.length > 0 && (() => {
+                          const descP = parseFloat(pedidoMasivo.descuentoPorc) || 0;
+                          const recP = parseFloat(pedidoMasivo.recargoPorc) || 0;
+                          const dProv = parseFloat(pedidoMasivo.dolarProveedor) || 0;
+                          const fDesc = Math.max(0, 1 - (descP / 100));
+                          const fRec = 1 + (recP / 100);
+                          const fNeto = fDesc * fRec;
+
+                          const totalUnid = pedidoMasivo.items.reduce((acc, i) => acc + parseInt(i.cantidad), 0);
+                          const subLista = pedidoMasivo.items.reduce((acc, i) => acc + (parseFloat(i.precioLista) * parseInt(i.cantidad)), 0);
+                          const montoAhorrado = subLista * (1 - fDesc);
+                          const subConDesc = subLista * fDesc;
+                          const montoRecargo = subConDesc * (fRec - 1);
+                          const totalFinalMonedaLista = subLista * fNeto;
+                          const totalFinalARS = pedidoMasivo.moneda === 'USD' ? Math.round(totalFinalMonedaLista * (dProv > 0 ? dProv : db.cotizacionDolar)) : Math.round(totalFinalMonedaLista);
+
+                          return (
+                            <div className="space-y-3 pt-1">
+                              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                                {pedidoMasivo.items.map(it => {
+                                  const pLista = parseFloat(it.precioLista);
+                                  const pFinalMoneda = redondear(pLista * fNeto);
+                                  const pFinalARS = pedidoMasivo.moneda === 'USD' ? Math.round(pLista * fNeto * (dProv > 0 ? dProv : db.cotizacionDolar)) : Math.round(pLista * fNeto);
+                                  return (
+                                    <div key={it.idTemp} className="bg-slate-900 border border-slate-800 rounded-xl p-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs">
+                                      <div className="min-w-0">
+                                        <p className="font-bold text-white">{it.concepto}</p>
+                                        <p className="text-[11px] text-slate-400 font-mono">
+                                          Lista: {pLista} {pedidoMasivo.moneda} c/u (Sub: {redondear(pLista * it.cantidad)} {pedidoMasivo.moneda})
+                                          <span className="text-emerald-400 font-bold ml-2">
+                                            ➔ Costo Real c/u: {pFinalMoneda} {pedidoMasivo.moneda} (${pFinalARS.toLocaleString('es-AR')} ARS)
+                                          </span>
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                                        <div className="flex items-center bg-slate-950 border border-slate-700 rounded-lg overflow-hidden">
+                                          <button type="button" onClick={() => cambiarCantItemPedidoMasivo(it.idTemp, -1)} className="px-2 py-0.5 hover:bg-slate-800 text-slate-300 font-bold">-</button>
+                                          <span className="px-2.5 py-0.5 font-mono font-black text-amber-400 text-xs border-x border-slate-700">{it.cantidad}</span>
+                                          <button type="button" onClick={() => cambiarCantItemPedidoMasivo(it.idTemp, 1)} className="px-2 py-0.5 hover:bg-slate-800 text-slate-300 font-bold">+</button>
+                                        </div>
+                                        <button type="button" onClick={() => quitarItemDePedidoMasivo(it.idTemp)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-6 h-6 rounded-lg text-xs"><i className="fa-solid fa-trash"></i></button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* TABLERO DE VERIFICACIÓN DE TOTALES */}
+                              <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                                <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase block">Total Unidades</span>
+                                  <span className="font-mono font-black text-white text-sm">{totalUnid} unid.</span>
+                                </div>
+                                <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase block">Subtotal Lista</span>
+                                  <span className="font-mono font-bold text-slate-300 text-xs">{redondear(subLista)} {pedidoMasivo.moneda}</span>
+                                </div>
+                                <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                                  <span className="text-[9px] font-bold text-emerald-400 uppercase block">Descuento ({descP || 0}%)</span>
+                                  <span className="font-mono font-bold text-emerald-400 text-xs">-{redondear(montoAhorrado)} {pedidoMasivo.moneda}</span>
+                                </div>
+                                <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                                  <span className="text-[9px] font-bold text-rose-400 uppercase block">Recargo ({recP || 0}%)</span>
+                                  <span className="font-mono font-bold text-rose-400 text-xs">+{redondear(montoRecargo)} {pedidoMasivo.moneda}</span>
+                                </div>
+                                <div className="col-span-2 sm:col-span-1 bg-amber-950/40 p-2 rounded-lg border border-amber-500/50">
+                                  <span className="text-[9px] font-black text-amber-300 uppercase block">Total Final Real</span>
+                                  <span className="font-mono font-black text-amber-400 text-xs block">{redondear(totalFinalMonedaLista)} {pedidoMasivo.moneda}</span>
+                                  <span className="font-mono font-bold text-white text-[10px]">$ {totalFinalARS.toLocaleString('es-AR')} ARS</span>
+                                </div>
+                              </div>
+
+                              {/* PASO 4: FORMA DE PAGO Y CONFIRMAR PEDIDO COMPLETO */}
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <button type="button" onClick={() => setPedidoMasivo({...pedidoMasivo, modalidadPago: 'billetera'})} className={`py-1.5 px-2.5 rounded-xl text-xs font-bold border transition ${pedidoMasivo.modalidadPago === 'billetera' ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
+                                  💳 Pagar desde Billetera
+                                </button>
+                                <button type="button" onClick={() => setPedidoMasivo({...pedidoMasivo, modalidadPago: 'deuda'})} className={`py-1.5 px-2.5 rounded-xl text-xs font-bold border transition ${pedidoMasivo.modalidadPago === 'deuda' ? 'bg-rose-600 text-white border-rose-500' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
+                                  🤝 Anotar en Deudas a Otros
+                                </button>
+                                <button type="button" onClick={() => setPedidoMasivo({...pedidoMasivo, modalidadPago: 'solo_stock'})} className={`py-1.5 px-2.5 rounded-xl text-xs font-bold border transition ${pedidoMasivo.modalidadPago === 'solo_stock' ? 'bg-slate-700 text-white border-slate-600' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
+                                  📦 Solo sumar Stock
+                                </button>
+                              </div>
+
+                              <div className="flex flex-col sm:flex-row gap-2.5">
+                                {pedidoMasivo.modalidadPago === 'billetera' && (
+                                  <select value={pedidoMasivo.walletId} onChange={e => setPedidoMasivo({...pedidoMasivo, walletId: e.target.value})} className="flex-1 bg-slate-900 border border-emerald-500/50 rounded-xl px-3 py-2 text-white text-xs font-bold">
+                                    <option value="">-- ¿De qué billetera sale el pago total? --</option>
+                                    {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>💳 {a.nombre} ({a.monto} {a.moneda})</option>)}
+                                  </select>
+                                )}
+                                <button type="button" onClick={confirmarPedidoMasivoCompleto} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black py-2.5 px-4 rounded-xl text-xs transition shadow-lg">
+                                  <i className="fa-solid fa-check-double mr-1.5"></i>Confirmar e Ingresar Pedido ({totalUnid} unid.)
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
                     
                     <form onSubmit={agregarStock} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
