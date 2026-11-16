@@ -149,6 +149,8 @@
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
+      const [menuRepFinAbierto, setMenuRepFinAbierto] = useState(false);
+      const [busquedaRepFin, setBusquedaRepFin] = useState('');
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS', metodoPago: '' });
       const [mostrarInputMetodoLibre, setMostrarInputMetodoLibre] = useState(false);
 
@@ -2078,28 +2080,65 @@
                             </select>
                         </div>
 
-                        <div className="md:col-span-3">
+                        <div className="md:col-span-3 relative">
                             <label className="text-[10px] text-amber-400 font-bold uppercase block mb-1">Sumar Repuesto de Stock</label>
-                            <select value="" onChange={e => {
-                                const repId = e.target.value;
-                                if (!repId) return;
-                                const repObj = (db.stock || []).find(s => s.id === parseInt(repId));
-                                if (!repObj) return;
-                                const actuales = nuevaReparacionFinalizada.repuestosStock || [];
-                                const yaElegidosDeEsteLote = actuales.filter(id => parseInt(id) === repObj.id).length;
-                                if (yaElegidosDeEsteLote >= parseInt(repObj.cantidad)) {
-                                    return alert('Ya seleccionaste todas las unidades disponibles de este lote.');
-                                }
-                                const esBat = esTextoBateria(repObj.concepto);
-                                setNuevaReparacionFinalizada({
-                                    ...nuevaReparacionFinalizada,
-                                    repuestosStock: [...actuales, repId],
-                                    diasGarantia: esBat ? '180' : nuevaReparacionFinalizada.diasGarantia
-                                });
-                            }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-amber-500">
-                                <option value="">+ Elegir de mi Stock (Podés sumar varios)</option>
-                                {(db.stock || []).filter(s => s.cantidad > 0).map(s => <option key={s.id} value={s.id}>{s.concepto} ({s.proveedor || 'S/P'} - Disp: {s.cantidad})</option>)}
-                            </select>
+                            <button type="button" onClick={() => setMenuRepFinAbierto(!menuRepFinAbierto)} className="w-full bg-slate-900 hover:bg-slate-800 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-left text-white text-xs flex justify-between items-center transition">
+                              <span className="truncate text-slate-300">
+                                {(nuevaReparacionFinalizada.repuestosStock || []).length > 0
+                                  ? `${(nuevaReparacionFinalizada.repuestosStock || []).length} repuesto(s) elegido(s)`
+                                  : '+ Buscar en mi Stock...'}
+                              </span>
+                              <i className={`fa-solid ${menuRepFinAbierto ? 'fa-chevron-up text-amber-400' : 'fa-magnifying-glass text-slate-400'} text-[10px] ml-1.5`}></i>
+                            </button>
+
+                            {menuRepFinAbierto && (
+                              <div className="absolute left-0 right-0 md:w-80 mt-1.5 bg-slate-900 border-2 border-amber-500/60 rounded-xl shadow-2xl z-40 p-2.5 space-y-2 fade-in">
+                                <div className="flex gap-1.5 items-center">
+                                  <div className="relative flex-1">
+                                    <i className="fa-solid fa-magnifying-glass absolute left-2.5 top-2 text-slate-500 text-[10px]"></i>
+                                    <input type="text" autoFocus placeholder="Buscar modelo, batería, módulo, prov..." value={busquedaRepFin} onChange={e => setBusquedaRepFin(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-2.5 py-1.5 text-white text-xs focus:outline-none focus:border-amber-500" />
+                                  </div>
+                                  <button type="button" onClick={() => { setMenuRepFinAbierto(false); setBusquedaRepFin(''); }} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1.5 rounded-lg text-xs"><i className="fa-solid fa-xmark"></i></button>
+                                </div>
+
+                                <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
+                                  {(() => {
+                                    const q = busquedaRepFin.toLowerCase().trim();
+                                    const disponibles = (db.stock || []).filter(s => parseInt(s.cantidad) > 0 && (!q || (s.concepto || '').toLowerCase().includes(q) || (s.proveedor || '').toLowerCase().includes(q)));
+                                    if (disponibles.length === 0) {
+                                      return <p className="text-[11px] text-slate-500 text-center py-3">No se encontraron repuestos con stock.</p>;
+                                    }
+                                    return disponibles.map(s => {
+                                      const actuales = nuevaReparacionFinalizada.repuestosStock || [];
+                                      const usadosLote = actuales.filter(id => parseInt(id) === s.id).length;
+                                      const dispReal = parseInt(s.cantidad) - usadosLote;
+                                      return (
+                                        <button key={s.id} type="button" disabled={dispReal <= 0} onClick={() => {
+                                          if (dispReal <= 0) return;
+                                          const esBat = esTextoBateria(s.concepto);
+                                          setNuevaReparacionFinalizada({
+                                            ...nuevaReparacionFinalizada,
+                                            repuestosStock: [...actuales, String(s.id)],
+                                            diasGarantia: esBat ? '180' : nuevaReparacionFinalizada.diasGarantia
+                                          });
+                                          setMenuRepFinAbierto(false);
+                                          setBusquedaRepFin('');
+                                        }} className="w-full text-left bg-slate-950 hover:bg-slate-800/90 disabled:opacity-40 border border-slate-800 hover:border-amber-500/40 rounded-lg p-2 transition flex justify-between items-center gap-2">
+                                          <div className="min-w-0">
+                                            <p className="font-bold text-white text-xs truncate">{s.concepto}</p>
+                                            <p className="text-[10px] text-slate-400 truncate">Prov: <span className="text-amber-400">{s.proveedor || 'S/P'}</span> • Disp: <strong className="text-white">{dispReal}</strong></p>
+                                          </div>
+                                          <div className="text-right shrink-0">
+                                            <span className="font-mono font-black text-emerald-400 text-xs block">{s.monto} {s.moneda}</span>
+                                            <span className="font-mono text-[9px] text-slate-500">{formatDinero(convertirParaMostrar(s.monto, s.moneda))}</span>
+                                          </div>
+                                        </button>
+                                      );
+                                    });
+                                  })()}
+                                </div>
+                              </div>
+                            )}
                         </div>
 
                         <div className="md:col-span-3">
@@ -2130,8 +2169,8 @@
                         </div>
                       </div>
 
-                      {/* ETIQUETAS DE REPUESTOS DE STOCK SELECCIONADOS Y BOTÓN DE REPUESTO EXTERNO */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                      {/* ETIQUETAS DE REPUESTOS DE STOCK SELECCIONADOS CON SU VALOR Y BOTÓN EXTERNO */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {(nuevaReparacionFinalizada.repuestosStock || []).length === 0 ? (
                             <span className="text-[11px] text-slate-500">Sin repuestos de stock seleccionados.</span>
@@ -2141,7 +2180,10 @@
                             return (
                               <span key={`${idRep}-${idxR}`} className="bg-amber-950/60 border border-amber-500/40 text-amber-300 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5">
                                 <i className="fa-solid fa-microchip text-[10px]"></i>
-                                {rObj.concepto} ({rObj.proveedor || 'S/P'})
+                                <span>{rObj.concepto} <span className="text-amber-400/80 font-normal">({rObj.proveedor || 'S/P'})</span></span>
+                                <span className="bg-slate-950 border border-amber-500/30 text-emerald-400 font-mono px-1.5 py-0.2 rounded text-[10px]">
+                                  {rObj.monto} {rObj.moneda} ({formatDinero(convertirParaMostrar(rObj.monto, rObj.moneda, nuevaReparacionFinalizada.monedaCobro), nuevaReparacionFinalizada.monedaCobro)})
+                                </span>
                                 <button type="button" onClick={() => {
                                   const copia = [...(nuevaReparacionFinalizada.repuestosStock || [])];
                                   copia.splice(idxR, 1);
