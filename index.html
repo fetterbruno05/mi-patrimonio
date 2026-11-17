@@ -213,7 +213,13 @@
                     if(d.moneda !== 'USD'){ return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(4), moneda: 'USD' }; }
                     return d;
                 }) : [],
-                stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean) : [],
+                stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean).map(s => {
+                    if (s.moneda === 'ARS') {
+                        const cotiRef = data.payload.cotizacionDolar || 1500;
+                        return { ...s, monto: Math.round(((parseFloat(s.monto) / cotiRef) + Number.EPSILON) * 100) / 100, moneda: 'USD' };
+                    }
+                    return s;
+                }) : [],
                 ventas: Array.isArray(data.payload.ventas) ? data.payload.ventas.filter(Boolean) : [],
                 taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [],
                 reparacionesFin: Array.isArray(data.payload.reparacionesFin) ? data.payload.reparacionesFin.filter(Boolean) : [], 
@@ -614,20 +620,22 @@
         const factorRecargo = 1 + (recargo / 100);
         const fechaHoy = new Date().toLocaleDateString();
 
-        // Cálculo exacto de costo real unitario y total de la operación
-        let costoUnitReal = redondear(precioLista * factorRecargo);
+        // El stock SIEMPRE se congela en USD para que nunca se devalúe si sube el dólar mañana
+        let costoUnitRealUSD = redondear(precioLista * factorRecargo);
         let monedaPagoReal = nuevoStock.moneda;
-        let totalPagoReal = redondear(costoUnitReal * cant);
+        let totalPagoReal = redondear(costoUnitRealUSD * cant);
 
-        // Si el precio está en USD pero el proveedor fijó su propio dólar, calculamos los ARS exactos que salen y ajustamos el costo real en USD
         if (nuevoStock.moneda === 'USD' && cotiProv > 0) {
           const unitARSExacto = precioLista * cotiProv * factorRecargo;
           totalPagoReal = Math.round(unitARSExacto * cant);
           monedaPagoReal = 'ARS';
-          costoUnitReal = redondear(unitARSExacto / db.cotizacionDolar);
+          costoUnitRealUSD = redondear(unitARSExacto / db.cotizacionDolar);
         } else if (nuevoStock.moneda === 'ARS') {
-          costoUnitReal = Math.round(precioLista * factorRecargo);
-          totalPagoReal = Math.round(costoUnitReal * cant);
+          const unitARSExacto = precioLista * factorRecargo;
+          totalPagoReal = Math.round(unitARSExacto * cant);
+          monedaPagoReal = 'ARS';
+          const cotiRef = cotiProv > 0 ? cotiProv : db.cotizacionDolar;
+          costoUnitRealUSD = redondear(unitARSExacto / cotiRef);
         }
 
         let activosAc = [...(db.activos || [])];
@@ -641,7 +649,7 @@
           const nomW = activosAc.find(w => w.id === parseInt(nuevoStock.walletId))?.nombre || 'Billetera';
           notaContableLog = `Pagado desde ${nomW} (${totalPagoReal} ${monedaPagoReal})`;
         } else if (modalidad === 'deuda') {
-          const detalleCompra = `Compra Stock: ${cant}x ${conceptoTrim}${recargo > 0 ? ` (+${recargo}% rec.)` : ''}${cotiProv > 0 ? ` (Dólar prov: $${cotiProv})` : ''}`;
+          const detalleCompra = `Compra Stock: ${cant}x ${conceptoTrim}${recargo > 0 ? ` (+${recargo}% rec.)` : ''}${cotiProv > 0 ? ` (Dólar ref: $${cotiProv})` : ''}`;
           const nvoMov = { id: Date.now() + 1, fecha: fechaHoy, motivo: detalleCompra, monto: totalPagoReal, moneda: monedaPagoReal, tipo: 'cargo' };
           const idxD = deudasAc.findIndex(d => d.acreedor.trim().toLowerCase() === proveedorTrim.toLowerCase() && d.moneda === monedaPagoReal);
           if (idxD !== -1) {
@@ -661,19 +669,19 @@
         const idx = stockAc.findIndex(s => 
           s.concepto.toLowerCase().trim() === conceptoTrim.toLowerCase() && 
           (s.proveedor || '').toLowerCase().trim() === proveedorTrim.toLowerCase() &&
-          parseFloat(s.monto) === costoUnitReal &&
-          s.moneda === nuevoStock.moneda &&
+          parseFloat(s.monto) === costoUnitRealUSD &&
+          s.moneda === 'USD' &&
           (s.fecha || new Date(s.id).toLocaleDateString()) === fechaHoy
         );
 
         if (idx !== -1) {
           stockAc[idx].cantidad = parseInt(stockAc[idx].cantidad) + cant;
         } else {
-          const item = { id: Date.now(), fecha: fechaHoy, concepto: conceptoTrim, cantidad: cant, monto: costoUnitReal, moneda: nuevoStock.moneda, proveedor: proveedorTrim };
+          const item = { id: Date.now(), fecha: fechaHoy, concepto: conceptoTrim, cantidad: cant, monto: costoUnitRealUSD, moneda: 'USD', proveedor: proveedorTrim };
           stockAc.unshift(item);
         }
 
-        const log = generarLog('Ingresó Stock', `Sumó ${cant}x "${conceptoTrim}" (Prov: ${proveedorTrim}). Costo unit. final: ${costoUnitReal} ${nuevoStock.moneda}. ${notaContableLog}.`);
+        const log = generarLog('Ingresó Stock', `Sumó ${cant}x "${conceptoTrim}" (Prov: ${proveedorTrim}). Congelado a ${costoUnitRealUSD} USD c/u. ${notaContableLog}.`);
         const historiaNueva = [...new Set([conceptoTrim, ...(db.historiaStock || [])])];
         const historiaProvNueva = [...new Set([proveedorTrim, ...(db.historiaProveedores || ['Proveedor Principal'])])];
         guardarEnNube({ ...db, activos: activosAc, deudas: deudasAc, stock: stockAc, historiaStock: historiaNueva, historiaProveedores: historiaProvNueva, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -723,6 +731,7 @@
         const descPorc = parseFloat(pedidoMasivo.descuentoPorc) || 0;
         const recPorc = parseFloat(pedidoMasivo.recargoPorc) || 0;
         const cotiProv = parseFloat(pedidoMasivo.dolarProveedor) || 0;
+        const cotiSist = parseFloat(db.cotizacionDolar) || 1500;
         const factorDesc = Math.max(0, 1 - (descPorc / 100));
         const factorRec = 1 + (recPorc / 100);
         const factorNeto = factorDesc * factorRec;
@@ -740,6 +749,7 @@
           monedaPagoReal = 'ARS';
         } else if (pedidoMasivo.moneda === 'ARS') {
           totalPagoReal = Math.round(totalConDescYRec);
+          monedaPagoReal = 'ARS';
         }
 
         let activosAc = [...(db.activos || [])];
@@ -776,20 +786,22 @@
         pedidoMasivo.items.forEach((it, idxItem) => {
           const cantItem = parseInt(it.cantidad);
           const pLista = parseFloat(it.precioLista);
-          let costoUnitReal = redondear(pLista * factorNeto);
+          let costoUnitRealUSD = redondear(pLista * factorNeto);
 
           if (pedidoMasivo.moneda === 'USD' && cotiProv > 0) {
             const unitARS = pLista * factorNeto * cotiProv;
-            costoUnitReal = redondear(unitARS / db.cotizacionDolar);
+            costoUnitRealUSD = redondear(unitARS / cotiSist);
           } else if (pedidoMasivo.moneda === 'ARS') {
-            costoUnitReal = Math.round(pLista * factorNeto);
+            const unitARS = pLista * factorNeto;
+            const cotiRef = cotiProv > 0 ? cotiProv : cotiSist;
+            costoUnitRealUSD = redondear(unitARS / cotiRef);
           }
 
           const idxS = stockAc.findIndex(s => 
             s.concepto.toLowerCase().trim() === it.concepto.toLowerCase() &&
             (s.proveedor || '').toLowerCase().trim() === proveedorTrim.toLowerCase() &&
-            parseFloat(s.monto) === costoUnitReal &&
-            s.moneda === pedidoMasivo.moneda &&
+            parseFloat(s.monto) === costoUnitRealUSD &&
+            s.moneda === 'USD' &&
             (s.fecha || new Date(s.id).toLocaleDateString()) === fechaHoy
           );
 
@@ -801,8 +813,8 @@
               fecha: fechaHoy,
               concepto: it.concepto,
               cantidad: cantItem,
-              monto: costoUnitReal,
-              moneda: pedidoMasivo.moneda,
+              monto: costoUnitRealUSD,
+              moneda: 'USD',
               proveedor: proveedorTrim
             });
           }
@@ -811,7 +823,7 @@
 
         const historiaNueva = [...new Set(nuevosNombresStock)];
         const historiaProvNueva = [...new Set([proveedorTrim, ...(db.historiaProveedores || ['Proveedor Principal'])])];
-        const log = generarLog('Ingresó Pedido Completo', `Cargó pedido de ${totalUnidades} unid. (${pedidoMasivo.items.length} modelos) de "${proveedorTrim}". ${descPorc > 0 ? `Desc: -${descPorc}%. ` : ''}${notaContable}.`, pedidoMasivo.items);
+        const log = generarLog('Ingresó Pedido Completo', `Cargó pedido de ${totalUnidades} unid. (${pedidoMasivo.items.length} modelos) de "${proveedorTrim}" congelado en USD. ${descPorc > 0 ? `Desc: -${descPorc}%. ` : ''}${notaContable}.`, pedidoMasivo.items);
 
         guardarEnNube({ ...db, activos: activosAc, deudas: deudasAc, stock: stockAc, historiaStock: historiaNueva, historiaProveedores: historiaProvNueva, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setPedidoMasivo({ ...pedidoMasivo, items: [], itemConcepto: '', itemCantidad: '1', itemMonto: '' });
@@ -2906,7 +2918,7 @@
 
                           <div className="col-span-1 sm:col-span-2">
                             <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">Dólar Prov. (Opc.)</label>
-                            <input type="number" step="any" disabled={pedidoMasivo.moneda === 'ARS'} placeholder={pedidoMasivo.moneda === 'ARS' ? 'N/A' : `Ej: ${db.cotizacionDolar}`} value={pedidoMasivo.dolarProveedor} onChange={e => setPedidoMasivo({...pedidoMasivo, dolarProveedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs disabled:opacity-40" />
+                            <input type="number" step="any" placeholder={`Vacío = $${db.cotizacionDolar}`} value={pedidoMasivo.dolarProveedor} onChange={e => setPedidoMasivo({...pedidoMasivo, dolarProveedor: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs" />
                           </div>
 
                           <div className="col-span-1 sm:col-span-2">
@@ -3119,7 +3131,7 @@
                         </div>
                         <div className="col-span-1 sm:col-span-3">
                           <label className="text-[10px] font-bold text-amber-400/90 uppercase block mb-1">Dólar Proveedor (Opc.)</label>
-                          <input type="number" step="any" disabled={nuevoStock.moneda === 'ARS'} placeholder={nuevoStock.moneda === 'ARS' ? 'No aplica en ARS' : `Vacío = $${db.cotizacionDolar}`} value={nuevoStock.dolarProveedor || ''} onChange={e => setNuevoStock({...nuevoStock, dolarProveedor: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-xs disabled:opacity-40" />
+                          <input type="number" step="any" placeholder={`Vacío = $${db.cotizacionDolar}`} value={nuevoStock.dolarProveedor || ''} onChange={e => setNuevoStock({...nuevoStock, dolarProveedor: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-xs" />
                         </div>
                         <div className="col-span-1 sm:col-span-3">
                           <label className="text-[10px] font-bold text-amber-400/90 uppercase block mb-1">% Recargo Transf. (Opc.)</label>
@@ -3606,7 +3618,9 @@
               <form onSubmit={(e) => {
                 e.preventDefault();
                 const provTrim = (editandoStock.proveedor || 'Sin proveedor').trim();
-                const actualizado = db.stock.map(s => s.id === editandoStock.id ? { ...s, concepto: editandoStock.concepto, monto: parseFloat(editandoStock.monto) || 0, moneda: editandoStock.moneda, proveedor: provTrim } : s);
+                const mNum = parseFloat(editandoStock.monto) || 0;
+                const montoEnUSD = editandoStock.moneda === 'ARS' ? redondear(mNum / db.cotizacionDolar) : redondear(mNum);
+                const actualizado = db.stock.map(s => s.id === editandoStock.id ? { ...s, concepto: editandoStock.concepto, monto: montoEnUSD, moneda: 'USD', proveedor: provTrim } : s);
                 const nuevasProv = [...new Set([provTrim, ...(db.historiaProveedores || [])])];
                 const log = generarLog('Editó Repuesto de Stock', `Modificó "${editandoStock.concepto}" (Prov: ${provTrim}). Precio: ${editandoStock.monto} ${editandoStock.moneda}`, editandoStock);
                 guardarEnNube({ ...db, stock: actualizado, historiaProveedores: nuevasProv, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
