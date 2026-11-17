@@ -1487,6 +1487,26 @@
           const resultadoNetoUSD = totalIngresosLimpiosUSD - totalGastosUSD;
           const margenAhorro = totalIngresosLimpiosUSD > 0 ? (resultadoNetoUSD / totalIngresosLimpiosUSD) * 100 : 0;
 
+          // 4. Cobertura de Gastos Fijos en Tiempo Real
+          const porcCoberturaFijos = gastosFijosMesUSD > 0 ? Math.min(100, (totalIngresosLimpiosUSD / gastosFijosMesUSD) * 100) : 100;
+          const faltanteFijosUSD = Math.max(0, gastosFijosMesUSD - totalIngresosLimpiosUSD);
+          const excedenteSobreFijosUSD = Math.max(0, totalIngresosLimpiosUSD - gastosFijosMesUSD);
+
+          // 5. Ratio Ganancia / Gasto (X a 1) y Blindaje Patrimonial (Regla 60 a 1)
+          const ratioGananciaGasto = totalGastosUSD > 0 ? (totalIngresosLimpiosUSD / totalGastosUSD) : (totalIngresosLimpiosUSD > 0 ? totalIngresosLimpiosUSD : 0);
+          const porcRatio60 = Math.min(100, (ratioGananciaGasto / 60) * 100);
+
+          const billUSD = (db.activos || []).reduce((acc, a) => acc + aUSDBase(a.monto, a.moneda, db.cotizacionDolar), 0);
+          const stockUSD = (db.stock || []).reduce((acc, s) => acc + (aUSDBase(s.monto, s.moneda, db.cotizacionDolar) * (parseInt(s.cantidad) || 0)), 0);
+          const cobrarUSD = (db.deudasCobrar || []).reduce((acc, d) => acc + aUSDBase(d.monto, d.moneda || 'USD', db.cotizacionDolar), 0);
+          const deudasUSD = (db.deudas || []).reduce((acc, d) => acc + aUSDBase(d.monto, d.moneda, db.cotizacionDolar), 0);
+          const patrimonioNetoUSD = Math.max(0, billUSD + stockUSD + cobrarUSD - deudasUSD);
+
+          const gastoBaseMensualUSD = totalGastosUSD > 0 ? totalGastosUSD : gastosFijosMesUSD;
+          const mesesBlindaje = gastoBaseMensualUSD > 0 ? (patrimonioNetoUSD / gastoBaseMensualUSD) : 0;
+          const metaBlindaje60USD = gastoBaseMensualUSD * 60;
+          const porcBlindaje60 = metaBlindaje60USD > 0 ? Math.min(100, (patrimonioNetoUSD / metaBlindaje60USD) * 100) : 0;
+
           const desgloseMetodos = Object.entries(mapaMetodos)
               .map(([metodo, montoUSD]) => ({ metodo, montoUSD }))
               .sort((a, b) => b.montoUSD - a.montoUSD);
@@ -1505,9 +1525,18 @@
               totalGastosUSD,
               resultadoNetoUSD,
               margenAhorro,
+              porcCoberturaFijos,
+              faltanteFijosUSD,
+              excedenteSobreFijosUSD,
+              ratioGananciaGasto,
+              porcRatio60,
+              patrimonioNetoUSD,
+              mesesBlindaje,
+              metaBlindaje60USD,
+              porcBlindaje60,
               desgloseMetodos
           };
-      }, [db.ventas, db.reparacionesFin, db.gastosPuntuales, db.gastosFijos, db.cotizacionDolar, periodoBalance]);
+      }, [db.ventas, db.reparacionesFin, db.gastosPuntuales, db.gastosFijos, db.activos, db.stock, db.deudasCobrar, db.deudas, db.cotizacionDolar, periodoBalance]);
 
       // CÁLCULOS GLOBALES
       const tBillUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -3542,6 +3571,96 @@
                           <p className="text-[10px] text-slate-300 mt-1 font-mono">
                             {balanceFinanciero.totalIngresosLimpiosUSD > 0 ? `Margen libre: ${balanceFinanciero.margenAhorro.toFixed(1)}%` : 'Sin ingresos en el período'}
                           </p>
+                        </div>
+                      </div>
+
+                      {/* BARRA DE COBERTURA DE GASTOS FIJOS EN TIEMPO REAL + TERMÓMETRO 60 A 1 */}
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                        {/* BARRA DE COBERTURA DE GASTOS FIJOS */}
+                        <div className="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3 shadow-lg flex flex-col justify-between">
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center gap-2">
+                              <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                                <i className="fa-solid fa-shield-halved text-cyan-400 mr-1.5"></i>Cobertura de Gastos Fijos Mensuales
+                              </h4>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${balanceFinanciero.faltanteFijosUSD === 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-600/50' : 'bg-amber-950 text-amber-400 border border-amber-600/50'}`}>
+                                {balanceFinanciero.faltanteFijosUSD === 0 ? '✅ Mes Cubierto (100%)' : `${balanceFinanciero.porcCoberturaFijos.toFixed(1)}% Cubierto`}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400">
+                              Meta fija a cubrir: <strong className="text-white font-mono">{formatDinero(convertirParaMostrar(balanceFinanciero.gastosFijosMesUSD, 'USD'))}</strong>
+                            </p>
+                          </div>
+
+                          {/* Barra de progreso visual */}
+                          <div className="space-y-1.5">
+                            <div className="w-full bg-slate-950 rounded-full h-4 border border-slate-800 overflow-hidden p-0.5">
+                              <div className={`h-full rounded-full transition-all duration-500 ${balanceFinanciero.faltanteFijosUSD === 0 ? 'bg-gradient-to-r from-emerald-500 to-teal-400' : 'bg-gradient-to-r from-amber-500 to-cyan-400'}`} style={{width: `${balanceFinanciero.porcCoberturaFijos}%`}}></div>
+                            </div>
+                            <div className="flex justify-between items-center text-[11px] font-mono">
+                              <span className="text-slate-400">Generado: <strong className="text-white">{formatDinero(convertirParaMostrar(balanceFinanciero.totalIngresosLimpiosUSD, 'USD'))}</strong></span>
+                              {balanceFinanciero.faltanteFijosUSD > 0 ? (
+                                <span className="text-amber-400 font-bold">Faltan {formatDinero(convertirParaMostrar(balanceFinanciero.faltanteFijosUSD, 'USD'))}</span>
+                              ) : (
+                                <span className="text-emerald-400 font-bold">+{formatDinero(convertirParaMostrar(balanceFinanciero.excedenteSobreFijosUSD, 'USD'))} libres sobre fijos</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex justify-between items-center text-[11px]">
+                            <span className="text-slate-400">Estado de punto de equilibrio:</span>
+                            <span className="font-bold text-slate-200">
+                              {balanceFinanciero.faltanteFijosUSD > 0
+                                ? `Aún trabajando para cubrir fijos`
+                                : `Todo lo que entra ahora es ganancia pura`}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* TERMÓMETRO REGLA 60 A 1 (FLUJO MENSUAL + BLINDAJE PATRIMONIAL) */}
+                        <div className="lg:col-span-6 bg-slate-900 border border-purple-500/30 rounded-2xl p-4 sm:p-5 space-y-3 shadow-lg flex flex-col justify-between">
+                          <div className="flex justify-between items-start gap-2">
+                            <div>
+                              <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                                <i className="fa-solid fa-gauge-high text-purple-400 mr-1.5"></i>Índice 60 a 1 (Ganancia vs. Gasto)
+                              </h4>
+                              <p className="text-[11px] text-slate-400">Cuántos dólares ganás por cada $1 gastado y blindaje acumulado</p>
+                            </div>
+                            <div className="bg-purple-950/60 border border-purple-500/40 rounded-xl px-3 py-1 text-right shrink-0">
+                              <span className="text-[9px] font-bold text-purple-300 uppercase block">Ratio del Período</span>
+                              <span className="font-mono font-black text-emerald-400 text-sm">
+                                {balanceFinanciero.ratioGananciaGasto.toFixed(1)} a 1
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase">1. Multiplicador Mensual</span>
+                                <span className="font-mono font-black text-purple-300 text-[11px]">{balanceFinanciero.ratioGananciaGasto.toFixed(2)}x / 60x</span>
+                              </div>
+                              <div className="w-full bg-slate-900 rounded-full h-2 border border-slate-800 overflow-hidden">
+                                <div className="bg-purple-500 h-full transition-all" style={{width: `${balanceFinanciero.porcRatio60}%`}}></div>
+                              </div>
+                              <p className="text-[10px] text-slate-400">
+                                Por cada <strong>$1</strong> que gastás, generás <strong className="text-emerald-400">${balanceFinanciero.ratioGananciaGasto.toFixed(2)}</strong> limpios.
+                              </p>
+                            </div>
+
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-bold text-amber-400 uppercase">2. Blindaje 60 Meses</span>
+                                <span className="font-mono font-black text-amber-400 text-[11px]">{balanceFinanciero.mesesBlindaje.toFixed(1)} / 60m</span>
+                              </div>
+                              <div className="w-full bg-slate-900 rounded-full h-2 border border-slate-800 overflow-hidden">
+                                <div className="bg-amber-500 h-full transition-all" style={{width: `${balanceFinanciero.porcBlindaje60}%`}}></div>
+                              </div>
+                              <p className="text-[10px] text-slate-400">
+                                Tu patrimonio cubre <strong className="text-white">{balanceFinanciero.mesesBlindaje.toFixed(1)} meses</strong> de gastos (Meta 60x: {formatDinero(convertirParaMostrar(balanceFinanciero.metaBlindaje60USD, 'USD'))}).
+                              </p>
+                            </div>
+                          </div>
                         </div>
                       </div>
 
