@@ -175,6 +175,7 @@
       const [editandoStock, setEditandoStock] = useState(null);
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
       const [editandoTaller, setEditandoTaller] = useState(null);
+      const [editandoRepHist, setEditandoRepHist] = useState(null);
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       const [filtroUsuario, setFiltroUsuario] = useState('');
@@ -2193,11 +2194,24 @@
                                 if (!idTaller) return setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
                                 const equipo = (db.taller || []).find(t => t.id === parseInt(idTaller));
                                 const autoGarantia = esTextoBateria(equipo?.falla) ? '180' : '90';
+                                const repsActuales = nuevaReparacionFinalizada.repuestosStock || [];
+                                let montoAuto = (equipo && equipo.origen === 'cliente' && equipo.presupuesto) ? equipo.presupuesto : '';
+                                let monedaAuto = (equipo && equipo.origen === 'cliente' && equipo.presupuestoMoneda) ? equipo.presupuestoMoneda : (equipo?.origen === 'gremio' ? 'USD' : 'ARS');
+
+                                if (equipo && equipo.origen === 'gremio' && repsActuales.length > 0) {
+                                    const sumaRepUSD = repsActuales.reduce((acc, idR) => {
+                                        const itemS = (db.stock || []).find(st => st.id === parseInt(idR));
+                                        return acc + (itemS ? aUSDBase(itemS.monto, itemS.moneda, db.cotizacionDolar) : 0);
+                                    }, 0);
+                                    montoAuto = redondear(sumaRepUSD + 10);
+                                    monedaAuto = 'USD';
+                                }
+
                                 setNuevaReparacionFinalizada({
                                     ...nuevaReparacionFinalizada,
                                     idEquipoTaller: idTaller,
-                                    montoCobrado: (equipo && equipo.origen === 'cliente' && equipo.presupuesto) ? equipo.presupuesto : '',
-                                    monedaCobro: (equipo && equipo.origen === 'cliente' && equipo.presupuestoMoneda) ? equipo.presupuestoMoneda : 'ARS',
+                                    montoCobrado: montoAuto,
+                                    monedaCobro: monedaAuto,
                                     diasGarantia: autoGarantia
                                 });
                             }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-cyan-500">
@@ -2242,9 +2256,25 @@
                                         <button key={s.id} type="button" disabled={dispReal <= 0} onClick={() => {
                                           if (dispReal <= 0) return;
                                           const esBat = esTextoBateria(s.concepto);
+                                          const nuevosReps = [...actuales, String(s.id)];
+                                          const eqSel = (db.taller || []).find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
+                                          let nvoMonto = nuevaReparacionFinalizada.montoCobrado;
+                                          let nvaMoneda = nuevaReparacionFinalizada.monedaCobro;
+
+                                          if (eqSel && eqSel.origen === 'gremio') {
+                                            const sumaRepUSD = nuevosReps.reduce((acc, idR) => {
+                                              const itemS = (db.stock || []).find(st => st.id === parseInt(idR));
+                                              return acc + (itemS ? aUSDBase(itemS.monto, itemS.moneda, db.cotizacionDolar) : 0);
+                                            }, 0);
+                                            nvaMoneda = 'USD';
+                                            nvoMonto = redondear(sumaRepUSD + 10);
+                                          }
+
                                           setNuevaReparacionFinalizada({
                                             ...nuevaReparacionFinalizada,
-                                            repuestosStock: [...actuales, String(s.id)],
+                                            repuestosStock: nuevosReps,
+                                            montoCobrado: nvoMonto,
+                                            monedaCobro: nvaMoneda,
                                             diasGarantia: esBat ? '180' : nuevaReparacionFinalizada.diasGarantia
                                           });
                                           setMenuRepFinAbierto(false);
@@ -2278,7 +2308,16 @@
                         </div>
 
                         <div className="md:col-span-3">
-                            <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Precio Final a Cobrar</label>
+                            <div className="flex justify-between items-center mb-1">
+                              <label className="text-[10px] text-slate-400 font-bold uppercase">Precio Final a Cobrar</label>
+                              {(() => {
+                                const eqSel = (db.taller || []).find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
+                                if (eqSel && eqSel.origen === 'gremio' && (nuevaReparacionFinalizada.repuestosStock || []).length > 0) {
+                                  return <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-700/60 px-1.5 py-0.2 rounded font-bold">Rep + 10 USD <i className="fa-solid fa-pen ml-0.5 text-[8px]"></i></span>;
+                                }
+                                return null;
+                              })()}
+                            </div>
                             <div className="flex">
                                 <input type="number" step="any" required placeholder="0.00" value={nuevaReparacionFinalizada.montoCobrado} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, montoCobrado: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-cyan-500 text-xs" />
                                 <select value={nuevaReparacionFinalizada.monedaCobro} onChange={e => {
@@ -2313,7 +2352,20 @@
                                 <button type="button" onClick={() => {
                                   const copia = [...(nuevaReparacionFinalizada.repuestosStock || [])];
                                   copia.splice(idxR, 1);
-                                  setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, repuestosStock: copia});
+                                  const eqSel = (db.taller || []).find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
+                                  let nvoMonto = nuevaReparacionFinalizada.montoCobrado;
+                                  if (eqSel && eqSel.origen === 'gremio') {
+                                    if (copia.length > 0) {
+                                      const sumaRepUSD = copia.reduce((acc, idR) => {
+                                        const itemS = (db.stock || []).find(st => st.id === parseInt(idR));
+                                        return acc + (itemS ? aUSDBase(itemS.monto, itemS.moneda, db.cotizacionDolar) : 0);
+                                      }, 0);
+                                      nvoMonto = redondear(sumaRepUSD + 10);
+                                    } else {
+                                      nvoMonto = '';
+                                    }
+                                  }
+                                  setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, repuestosStock: copia, montoCobrado: nvoMonto});
                                 }} className="text-amber-400 hover:text-white ml-1"><i className="fa-solid fa-xmark"></i></button>
                               </span>
                             );
@@ -2521,9 +2573,22 @@
                                       </div>
                                     </div>
                                 )}
-                                {!esPendiente && (
-                                    <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-2.5 py-1 rounded-lg transition-colors text-[11px] mt-1"><i className="fa-solid fa-trash mr-1"></i> Borrar</button>
-                                )}
+                                <div className="flex gap-1.5 mt-1">
+                                  <button onClick={() => setEditandoRepHist({
+                                    ...item,
+                                    nuevoMonto: item.montoCobradoOriginal,
+                                    nuevaMoneda: item.monedaCobroOriginal || 'USD',
+                                    nuevaFalla: item.equipoOriginal?.falla || '',
+                                    nuevosDiasGarantia: item.diasGarantia !== undefined ? String(item.diasGarantia) : '90'
+                                  })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1 rounded-lg transition-colors text-[11px]" title="Editar precio o datos">
+                                    <i className="fa-solid fa-pen mr-1"></i> Editar
+                                  </button>
+                                  {!esPendiente && (
+                                    <button onClick={() => eliminarReparacionHistorial(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 px-2.5 py-1 rounded-lg transition-colors text-[11px]">
+                                      <i className="fa-solid fa-trash mr-1"></i> Borrar
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                         );
@@ -3904,6 +3969,84 @@
                 <div className="flex gap-2 pt-1">
                   <button type="submit" className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2.5 rounded-xl transition text-xs">Guardar</button>
                   <button type="button" onClick={() => setEditandoStock(null)} className="bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+          {editandoRepHist && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const mOrig = parseFloat(editandoRepHist.nuevoMonto) || 0;
+                const monOrig = editandoRepHist.nuevaMoneda || 'USD';
+                const nvoMontoUSD = aUSDBase(mOrig, monOrig, db.cotizacionDolar);
+                const antMontoUSD = parseFloat(editandoRepHist.montoCobrado) || 0;
+                const diffUSD = nvoMontoUSD - antMontoUSD;
+                const diasG = parseInt(editandoRepHist.nuevosDiasGarantia) || 0;
+
+                let deudasCb = [...(db.deudasCobrar || [])];
+                if (editandoRepHist.equipoOriginal?.origen === 'gremio' && Math.abs(diffUSD) > 0.001) {
+                  const nomGremio = editandoRepHist.equipoOriginal.gremio;
+                  const idx = deudasCb.findIndex(d => d.deudor === nomGremio && d.motivo === "Acumulado de Reparaciones Gremio");
+                  if (idx !== -1) {
+                    const nvoSaldo = Math.max(0, parseFloat(deudasCb[idx].monto) + diffUSD);
+                    const movsAct = (deudasCb[idx].movimientos || []).map(m => {
+                      if (m.detalle && m.detalle.includes(editandoRepHist.equipoOriginal.imei)) {
+                        return { ...m, titulo: `${editandoRepHist.equipoOriginal.modelo} (${editandoRepHist.nuevaFalla.trim()})`, montoUSD: nvoMontoUSD, monto: nvoMontoUSD };
+                      }
+                      return m;
+                    });
+                    deudasCb[idx] = { ...deudasCb[idx], monto: redondear(nvoSaldo), movimientos: movsAct };
+                  }
+                }
+
+                const repsAc = (db.reparacionesFin || []).map(r => {
+                  if (r.id === editandoRepHist.id) {
+                    const cobradoYaUSD = Math.max(0, antMontoUSD - (parseFloat(r.montoAdeudadoRestante) || 0));
+                    const nuevoRestante = r.estadoCobro === 'pendiente' ? Math.max(0, nvoMontoUSD - cobradoYaUSD) : 0;
+                    return {
+                      ...r,
+                      montoCobradoOriginal: mOrig,
+                      monedaCobroOriginal: monOrig,
+                      montoCobrado: nvoMontoUSD,
+                      montoAdeudadoRestante: nuevoRestante,
+                      diasGarantia: diasG,
+                      equipoOriginal: { ...r.equipoOriginal, falla: editandoRepHist.nuevaFalla.trim() }
+                    };
+                  }
+                  return r;
+                });
+
+                const log = generarLog('Editó Reparación Histórica', `Modificó ${editandoRepHist.equipoOriginal?.modelo} a ${mOrig} ${monOrig}.`);
+                guardarEnNube({ ...db, reparacionesFin: repsAc, deudasCobrar: deudasCb, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+                setEditandoRepHist(null);
+              }} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-xs w-full space-y-4 shadow-2xl">
+                <h3 className="font-black text-white text-base border-b border-slate-800 pb-2.5"><i className="fa-solid fa-pen text-cyan-400 mr-2"></i>Editar Reparación</h3>
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <label className="text-slate-400 font-bold mb-1 block">Trabajo / Falla</label>
+                    <input type="text" required value={editandoRepHist.nuevaFalla} onChange={e => setEditandoRepHist({...editandoRepHist, nuevaFalla: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-cyan-400 font-bold mb-1 block">Precio Total Cobrado</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoRepHist.nuevoMonto} onChange={e => setEditandoRepHist({...editandoRepHist, nuevoMonto: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                      <select value={editandoRepHist.nuevaMoneda} onChange={e => setEditandoRepHist({...editandoRepHist, nuevaMoneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-teal-400 font-bold mb-1 block">Plazo de Garantía</label>
+                    <select value={editandoRepHist.nuevosDiasGarantia} onChange={e => setEditandoRepHist({...editandoRepHist, nuevosDiasGarantia: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold">
+                      <option value="180">6 Meses (180 días - Batería)</option>
+                      <option value="90">3 Meses (90 días - Estándar)</option>
+                      <option value="30">1 Mes (30 días)</option>
+                      <option value="0">Sin Garantía</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button type="submit" className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl transition text-xs">Guardar</button>
+                  <button type="button" onClick={() => setEditandoRepHist(null)} className="bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
                 </div>
               </form>
             </div>
