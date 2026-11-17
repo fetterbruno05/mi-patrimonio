@@ -3985,14 +3985,20 @@
                 const diasG = parseInt(editandoRepHist.nuevosDiasGarantia) || 0;
 
                 let deudasCb = [...(db.deudasCobrar || [])];
-                if (editandoRepHist.equipoOriginal?.origen === 'gremio' && Math.abs(diffUSD) > 0.001) {
-                  const nomGremio = editandoRepHist.equipoOriginal.gremio;
+                const eqOrig = editandoRepHist.equipoOriginal || {};
+                const imeiEq = eqOrig.imei || '';
+                const nomCli = (eqOrig.clienteNombre || '').toLowerCase().trim();
+                const modEq = (eqOrig.modelo || '').toLowerCase().trim();
+
+                // 1. Si es GREMIO: actualiza el 100% de la diferencia en Cuentas a Cobrar
+                if (eqOrig.origen === 'gremio' && Math.abs(diffUSD) > 0.001) {
+                  const nomGremio = eqOrig.gremio;
                   const idx = deudasCb.findIndex(d => d.deudor === nomGremio && d.motivo === "Acumulado de Reparaciones Gremio");
                   if (idx !== -1) {
                     const nvoSaldo = Math.max(0, parseFloat(deudasCb[idx].monto) + diffUSD);
                     const movsAct = (deudasCb[idx].movimientos || []).map(m => {
-                      if (m.detalle && m.detalle.includes(editandoRepHist.equipoOriginal.imei)) {
-                        return { ...m, titulo: `${editandoRepHist.equipoOriginal.modelo} (${editandoRepHist.nuevaFalla.trim()})`, montoUSD: nvoMontoUSD, monto: nvoMontoUSD };
+                      if (imeiEq && m.detalle && m.detalle.includes(imeiEq)) {
+                        return { ...m, titulo: `${eqOrig.modelo} (${editandoRepHist.nuevaFalla.trim()})`, montoUSD: nvoMontoUSD, monto: nvoMontoUSD };
                       }
                       return m;
                     });
@@ -4000,16 +4006,71 @@
                   }
                 }
 
+                // 2. Si es CLIENTE MINORISTA (y ya fue cobrado / enviado a Cuentas a Cobrar): recalcula Costo Repuesto + 50% Ganancia
+                if (eqOrig.origen === 'cliente' && editandoRepHist.estadoCobro !== 'pendiente' && Math.abs(diffUSD) > 0.001) {
+                  const costoRepUSD = parseFloat(editandoRepHist.costoRepuestoUSD) || 0;
+                  const antCorrespondeUSD = costoRepUSD + ((antMontoUSD - costoRepUSD) / 2);
+                  const nvoCorrespondeUSD = costoRepUSD + ((nvoMontoUSD - costoRepUSD) / 2);
+                  const diffClienteUSD = nvoCorrespondeUSD - antCorrespondeUSD;
+
+                  const coincideMovCliente = (m) => {
+                    const tit = (m.titulo || '').toLowerCase();
+                    const det = (m.detalle || '').toLowerCase();
+                    if (imeiEq && (det.includes(imeiEq.toLowerCase()) || tit.includes(imeiEq.toLowerCase()))) return true;
+                    if (nomCli && (tit.includes(nomCli) || det.includes(nomCli)) && (!modEq || tit.includes(modEq) || det.includes(modEq))) return true;
+                    return false;
+                  };
+
+                  let idxC = deudasCb.findIndex(d => (d.movimientos || []).some(coincideMovCliente));
+                  if (idxC === -1) {
+                    idxC = deudasCb.findIndex(d => 
+                      (d.motivo || '').toLowerCase().includes('taller') || 
+                      (d.motivo || '').toLowerCase().includes('50%') ||
+                      ((d.motivo || '').toLowerCase().includes('reparaciones') && d.deudor !== eqOrig.gremio)
+                    );
+                  }
+
+                  if (idxC !== -1) {
+                    const esDeudaARS = deudasCb[idxC].moneda === 'ARS';
+                    const deltaAplicar = esDeudaARS ? (diffClienteUSD * db.cotizacionDolar) : diffClienteUSD;
+                    const nvoMontoMov = esDeudaARS ? Math.round(nvoCorrespondeUSD * db.cotizacionDolar) : redondear(nvoCorrespondeUSD);
+                    const nvoSaldo = Math.max(0, parseFloat(deudasCb[idxC].monto) + deltaAplicar);
+
+                    let actualizoAlgunMov = false;
+                    const movsAct = (deudasCb[idxC].movimientos || []).map(m => {
+                      if (!actualizoAlgunMov && coincideMovCliente(m)) {
+                        actualizoAlgunMov = true;
+                        return {
+                          ...m,
+                          montoUSD: nvoCorrespondeUSD,
+                          monto: nvoMontoMov
+                        };
+                      }
+                      return m;
+                    });
+
+                    deudasCb[idxC] = {
+                      ...deudasCb[idxC],
+                      monto: esDeudaARS ? Math.round(nvoSaldo) : redondear(nvoSaldo),
+                      movimientos: movsAct
+                    };
+                  }
+                }
+
                 const repsAc = (db.reparacionesFin || []).map(r => {
                   if (r.id === editandoRepHist.id) {
                     const cobradoYaUSD = Math.max(0, antMontoUSD - (parseFloat(r.montoAdeudadoRestante) || 0));
                     const nuevoRestante = r.estadoCobro === 'pendiente' ? Math.max(0, nvoMontoUSD - cobradoYaUSD) : 0;
+                    const pagosAct = (Array.isArray(r.detallePagos) && r.detallePagos.length === 1 && r.estadoCobro !== 'pendiente')
+                      ? [{ ...r.detallePagos[0], monto: mOrig, moneda: monOrig, montoUSD: nvoMontoUSD }]
+                      : (r.detallePagos || []);
                     return {
                       ...r,
                       montoCobradoOriginal: mOrig,
                       monedaCobroOriginal: monOrig,
                       montoCobrado: nvoMontoUSD,
                       montoAdeudadoRestante: nuevoRestante,
+                      detallePagos: pagosAct,
                       diasGarantia: diasG,
                       equipoOriginal: { ...r.equipoOriginal, falla: editandoRepHist.nuevaFalla.trim() }
                     };
@@ -4017,7 +4078,7 @@
                   return r;
                 });
 
-                const log = generarLog('Editó Reparación Histórica', `Modificó ${editandoRepHist.equipoOriginal?.modelo} a ${mOrig} ${monOrig}.`);
+                const log = generarLog('Editó Reparación Histórica', `Modificó ${eqOrig.modelo} a ${mOrig} ${monOrig}.`);
                 guardarEnNube({ ...db, reparacionesFin: repsAc, deudasCobrar: deudasCb, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoRepHist(null);
               }} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-xs w-full space-y-4 shadow-2xl">
