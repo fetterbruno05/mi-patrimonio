@@ -1397,6 +1397,117 @@
           };
       }, [db.reparacionesFin, filtroStats, stockAgrupado]);
 
+      const [tabStats, setTabStats] = useState('balance');
+      const [periodoBalance, setPeriodoBalance] = useState('mes_actual');
+
+      const balanceFinanciero = useMemo(() => {
+          const ahora = new Date();
+          let desdeTs = 0;
+          let hastaTs = Infinity;
+
+          if (periodoBalance === 'mes_actual') {
+              desdeTs = new Date(ahora.getFullYear(), ahora.getMonth(), 1).getTime();
+          } else if (periodoBalance === 'mes_anterior') {
+              desdeTs = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1).getTime();
+              hastaTs = new Date(ahora.getFullYear(), ahora.getMonth(), 0, 23, 59, 59, 999).getTime();
+          } else if (periodoBalance === 'ultimos_30') {
+              desdeTs = Date.now() - (30 * 24 * 60 * 60 * 1000);
+          }
+
+          const obtenerTs = (item) => {
+              if (item.fechaTimestamp) return item.fechaTimestamp;
+              if (typeof item.id === 'number' && item.id > 1000000000000) return item.id;
+              if (item.fecha) {
+                  const p = item.fecha.split('/');
+                  if (p.length === 3) return new Date(p[2], p[1] - 1, p[0]).getTime();
+              }
+              return 0;
+          };
+
+          // 1. Comisiones por Ventas de Equipos
+          let ganVentasUSD = 0;
+          let cantEquiposVendidos = 0;
+          (db.ventas || []).forEach(v => {
+              const ts = obtenerTs(v);
+              if (ts >= desdeTs && ts <= hastaTs) {
+                  ganVentasUSD += aUSDBase(v.totalComision, v.moneda, db.cotizacionDolar);
+                  cantEquiposVendidos += (parseInt(v.cantidad) || 0);
+              }
+          });
+
+          // 2. Ganancia Limpia de Taller (Particular 50% vs Gremio 100% + Recupero de Repuestos + Medios de Pago)
+          let ganTallerClienteUSD = 0;
+          let ganTallerGremioUSD = 0;
+          let recuperoRepuestosUSD = 0;
+          let cantRepCliente = 0;
+          let cantRepGremio = 0;
+          const mapaMetodos = {};
+
+          (db.reparacionesFin || []).forEach(r => {
+              const ts = obtenerTs(r);
+              if (ts >= desdeTs && ts <= hastaTs) {
+                  const totUSD = parseFloat(r.montoCobrado) || 0;
+                  const costoRepUSD = parseFloat(r.costoRepuestoUSD) || 0;
+                  const netaOrdenUSD = Math.max(0, totUSD - costoRepUSD);
+
+                  if (r.equipoOriginal?.origen === 'gremio') {
+                      ganTallerGremioUSD += netaOrdenUSD;
+                      recuperoRepuestosUSD += costoRepUSD;
+                      cantRepGremio += 1;
+                  } else {
+                      ganTallerClienteUSD += (netaOrdenUSD / 2);
+                      recuperoRepuestosUSD += costoRepUSD;
+                      cantRepCliente += 1;
+                  }
+
+                  if (Array.isArray(r.detallePagos) && r.detallePagos.length > 0) {
+                      r.detallePagos.forEach(p => {
+                          const met = p.metodo || 'Otro';
+                          const valUSD = p.montoUSD !== undefined ? parseFloat(p.montoUSD) : aUSDBase(p.monto, p.moneda, db.cotizacionDolar);
+                          mapaMetodos[met] = (mapaMetodos[met] || 0) + valUSD;
+                      });
+                  }
+              }
+          });
+
+          // 3. Gastos Sueltos y Carga Fija
+          let gastosSueltosUSD = 0;
+          (db.gastosPuntuales || []).forEach(g => {
+              const ts = obtenerTs(g);
+              if (ts >= desdeTs && ts <= hastaTs) {
+                  gastosSueltosUSD += aUSDBase(g.monto, g.moneda, db.cotizacionDolar);
+              }
+          });
+
+          const gastosFijosMesUSD = (db.gastosFijos || []).reduce((acc, g) => acc + aUSDBase(g.monto, g.moneda, db.cotizacionDolar), 0);
+
+          const totalIngresosLimpiosUSD = ganVentasUSD + ganTallerClienteUSD + ganTallerGremioUSD;
+          const totalGastosUSD = gastosSueltosUSD + gastosFijosMesUSD;
+          const resultadoNetoUSD = totalIngresosLimpiosUSD - totalGastosUSD;
+          const margenAhorro = totalIngresosLimpiosUSD > 0 ? (resultadoNetoUSD / totalIngresosLimpiosUSD) * 100 : 0;
+
+          const desgloseMetodos = Object.entries(mapaMetodos)
+              .map(([metodo, montoUSD]) => ({ metodo, montoUSD }))
+              .sort((a, b) => b.montoUSD - a.montoUSD);
+
+          return {
+              ganVentasUSD,
+              cantEquiposVendidos,
+              ganTallerClienteUSD,
+              ganTallerGremioUSD,
+              recuperoRepuestosUSD,
+              cantRepCliente,
+              cantRepGremio,
+              gastosSueltosUSD,
+              gastosFijosMesUSD,
+              totalIngresosLimpiosUSD,
+              totalGastosUSD,
+              resultadoNetoUSD,
+              margenAhorro,
+              desgloseMetodos
+          };
+      }, [db.ventas, db.reparacionesFin, db.gastosPuntuales, db.gastosFijos, db.cotizacionDolar, periodoBalance]);
+
       // CÁLCULOS GLOBALES
       const tBillUSD = (db.activos || []).filter(a => a.tipo === 'billetera' || !a.tipo).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tActFisUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -3307,118 +3418,266 @@
                 </div>
               )}
 
-              {/* VISTA NUEVA: ESTADÍSTICAS DE CONSUMO Y COMPRA DE BATERÍAS */}
+              {/* VISTA NUEVA: CENTRO DE ESTADÍSTICAS Y BALANCE MENSUAL */}
               {vista === 'estadisticas' && (
                 <div className="max-w-5xl mx-auto space-y-5 fade-in">
-                  
-                  {/* TARJETAS DE VOLUMEN Y PROPORCIÓN MINORISTA VS MAYORISTA */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div className="bg-gradient-to-br from-purple-900/40 to-slate-900 border border-purple-500/30 rounded-2xl p-4 shadow-lg text-center">
-                      <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-battery-full mr-1.5"></i>Total Consumido</p>
-                      <h2 className="text-2xl sm:text-3xl font-black text-white">{estadisticasConsumo.totalUnidades} <span className="text-xs font-normal text-slate-400">unid.</span></h2>
-                      <p className="text-[10px] text-slate-400 mt-1">Según reparaciones finalizadas</p>
-                    </div>
-                    <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 shadow-lg text-center">
-                      <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-user mr-1.5"></i>Clientes Particulares (Minorista)</p>
-                      <h2 className="text-2xl sm:text-3xl font-black text-cyan-400">{estadisticasConsumo.totalCliente} <span className="text-sm font-bold text-slate-300">({estadisticasConsumo.porcentajeCliente.toFixed(1)}%)</span></h2>
-                      <p className="text-[10px] text-slate-500 mt-1">Reparaciones 50/50 en local</p>
-                    </div>
-                    <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4 shadow-lg text-center">
-                      <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-building mr-1.5"></i>Gremio / Mayorista</p>
-                      <h2 className="text-2xl sm:text-3xl font-black text-amber-400">{estadisticasConsumo.totalGremio} <span className="text-sm font-bold text-slate-300">({estadisticasConsumo.porcentajeGremio.toFixed(1)}%)</span></h2>
-                      <p className="text-[10px] text-slate-500 mt-1">Equipos de terceros / gremio</p>
-                    </div>
+
+                  {/* SELECTOR DE PESTAÑA SUPERIOR */}
+                  <div className="bg-slate-900 border border-slate-800 p-1.5 rounded-2xl flex gap-2 shadow-lg">
+                    <button type="button" onClick={() => setTabStats('balance')} className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 ${tabStats === 'balance' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800/60'}`}>
+                      <i className="fa-solid fa-sack-dollar"></i> Balance Mensual y Finanzas
+                    </button>
+                    <button type="button" onClick={() => setTabStats('baterias')} className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 ${tabStats === 'baterias' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800/60'}`}>
+                      <i className="fa-solid fa-battery-full"></i> Rotación de Baterías y Simulador
+                    </button>
                   </div>
 
-                  {/* CONTROLES Y SIMULADOR INTELIGENTE DE COMPRA */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Qué analizar</label>
-                        <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex">
-                          <button type="button" onClick={() => setFiltroStats({...filtroStats, tipo: 'baterias'})} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${filtroStats.tipo === 'baterias' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>Solo Baterías</button>
-                          <button type="button" onClick={() => setFiltroStats({...filtroStats, tipo: 'todos'})} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${filtroStats.tipo === 'todos' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>Todos los Repuestos</button>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Período de tiempo</label>
-                        <select value={filtroStats.dias} onChange={e => setFiltroStats({...filtroStats, dias: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-purple-500">
-                          <option value="todos">Histórico Completo (Más preciso)</option>
-                          <option value="30">Últimos 30 días</option>
-                          <option value="90">Últimos 3 meses (90 días)</option>
-                          <option value="180">Últimos 6 meses (180 días)</option>
-                        </select>
-                      </div>
-
-                      <div className="bg-purple-950/30 border border-purple-500/40 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                  {/* PESTAÑA 1: BALANCE MENSUAL Y ESTADÍSTICAS DEL NEGOCIO */}
+                  {tabStats === 'balance' && (
+                    <div className="space-y-5 fade-in">
+                      {/* FILTRO DE PERÍODO */}
+                      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-lg">
                         <div>
-                          <label className="text-[9px] font-black text-purple-300 uppercase block">Simulador de Pedido</label>
-                          <span className="text-[10px] text-slate-400">¿Cuántas vas a comprar en total?</span>
+                          <h3 className="text-xs font-black text-white uppercase tracking-wider"><i className="fa-solid fa-scale-unbalanced-flip text-purple-400 mr-1.5"></i>Rendimiento Real (Ganancia Limpia vs. Gastos)</h3>
+                          <p className="text-[11px] text-slate-400">Calcula tu ganancia pura descontando el costo de los repuestos invertidos.</p>
                         </div>
-                        <input type="number" min="1" value={filtroStats.simuladorCompra} onChange={e => setFiltroStats({...filtroStats, simuladorCompra: e.target.value})} className="w-16 bg-slate-950 border border-purple-500 rounded-lg px-2 py-1 text-center font-mono font-black text-white text-sm focus:outline-none" />
-                      </div>
-                    </div>
-
-                    {/* RANKING POR MODELO CON PORCENTAJE, STOCK ACTUAL Y COMPRA SUGERIDA */}
-                    <div className="pt-2 space-y-3">
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1 border-b border-slate-800 pb-2">
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                          <i className="fa-solid fa-ranking-star text-purple-400 mr-1.5"></i>Rotación vs. Stock Actual y Compra Inteligente
-                        </h3>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          En stock hoy: <strong className="text-amber-400">{estadisticasConsumo.totalStockAnalizado}</strong> + Pedido: <strong className="text-purple-400">{filtroStats.simuladorCompra || 0}</strong> = <strong className="text-white">{estadisticasConsumo.totalStockAnalizado + (parseInt(filtroStats.simuladorCompra) || 0)} unid. totales</strong>
-                        </span>
-                      </div>
-
-                      {estadisticasConsumo.items.length === 0 ? (
-                        <p className="text-center text-slate-500 py-6 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">
-                          Todavía no hay reparaciones finalizadas con baterías/repuestos en este período.
-                        </p>
-                      ) : (
-                        <div className="space-y-2.5">
-                          {estadisticasConsumo.items.map((item, i) => (
-                            <div key={item.nombre} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2 hover:border-slate-700 transition">
-                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                                <div>
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="bg-slate-800 text-slate-300 font-mono font-black px-2 py-0.5 rounded text-[10px]">#{i + 1}</span>
-                                    <h4 className="font-black text-white text-sm">{item.nombre}</h4>
-                                    <span className="bg-purple-950 border border-purple-700 text-purple-300 px-2 py-0.5 rounded text-[10px] font-black">
-                                      {item.porcentaje.toFixed(1)}% de rotación
-                                    </span>
-                                    <span className="bg-slate-900 border border-amber-500/40 text-amber-400 px-2 py-0.5 rounded text-[10px] font-mono font-bold">
-                                      En Stock hoy: {item.stockActual} unid.
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-3 mt-1 text-[11px] flex-wrap">
-                                    <span className="text-slate-300 font-bold">Colocadas: <strong className="text-white">{item.total}</strong></span>
-                                    <span className="text-cyan-400"><i className="fa-solid fa-user mr-1"></i>Cliente: <strong>{item.cliente}</strong></span>
-                                    <span className="text-amber-400"><i className="fa-solid fa-building mr-1"></i>Gremio: <strong>{item.gremio}</strong></span>
-                                    <span className="text-slate-500 font-mono text-[10px]">• Stock ideal tras compra: <strong>{Math.round(item.stockIdeal)} unid.</strong></span>
-                                  </div>
-                                </div>
-
-                                <div className={`bg-slate-900 border rounded-lg px-3 py-1.5 text-right shrink-0 w-full sm:w-auto flex sm:block justify-between items-center ${item.sugerenciaCompra > 0 ? 'border-emerald-500/40' : 'border-slate-800'}`}>
-                                  <span className="text-[9px] text-slate-400 font-bold uppercase block">Sugerido p/ equilibrar stock:</span>
-                                  {item.sugerenciaCompra > 0 ? (
-                                    <span className="font-mono font-black text-emerald-400 text-sm">Comprar {item.sugerenciaCompra} unid.</span>
-                                  ) : (
-                                    <span className="font-mono font-bold text-slate-500 text-xs">Stock cubierto (0 unid.)</span>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* Barra de proporción visual */}
-                              <div className="w-full bg-slate-900 rounded-full h-2 border border-slate-800 overflow-hidden flex">
-                                <div className={`h-full ${COLORES_GRAFICO[i % COLORES_GRAFICO.length]}`} style={{width: `${item.porcentaje}%`}}></div>
-                              </div>
-                            </div>
+                        <div className="flex gap-1.5 flex-wrap w-full sm:w-auto">
+                          {[
+                            { id: 'mes_actual', label: 'Este Mes' },
+                            { id: 'mes_anterior', label: 'Mes Anterior' },
+                            { id: 'ultimos_30', label: 'Últ. 30 Días' },
+                            { id: 'historico', label: 'Histórico' }
+                          ].map(p => (
+                            <button key={p.id} type="button" onClick={() => setPeriodoBalance(p.id)} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-xl text-xs font-bold transition ${periodoBalance === p.id ? 'bg-purple-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'}`}>
+                              {p.label}
+                            </button>
                           ))}
                         </div>
-                      )}
+                      </div>
+
+                      {/* TARJETAS PRINCIPALES: INGRESOS LIMPIOS vs GASTOS vs RESULTADO NETO */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-4 shadow-lg">
+                          <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-arrow-trend-up mr-1.5"></i>Ganancia Limpia Generada</p>
+                          <h2 className="text-2xl font-black text-white">{formatDinero(convertirParaMostrar(balanceFinanciero.totalIngresosLimpiosUSD, 'USD'))}</h2>
+                          <p className="text-[10px] text-slate-400 mt-1">Taller (50% + Gremio) + Ventas</p>
+                        </div>
+
+                        <div className="bg-gradient-to-br from-rose-900/40 to-slate-900 border border-rose-500/30 rounded-2xl p-4 shadow-lg">
+                          <p className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-arrow-trend-down mr-1.5"></i>Gastos Totales (Fijos + Sueltos)</p>
+                          <h2 className="text-2xl font-black text-rose-400">-{formatDinero(convertirParaMostrar(balanceFinanciero.totalGastosUSD, 'USD'))}</h2>
+                          <p className="text-[10px] text-slate-400 mt-1">Fijos: {formatDinero(convertirParaMostrar(balanceFinanciero.gastosFijosMesUSD, 'USD'))} • Sueltos: {formatDinero(convertirParaMostrar(balanceFinanciero.gastosSueltosUSD, 'USD'))}</p>
+                        </div>
+
+                        <div className={`rounded-2xl p-4 shadow-lg border ${balanceFinanciero.resultadoNetoUSD >= 0 ? 'bg-gradient-to-br from-blue-900/40 to-slate-900 border-blue-500/40' : 'bg-gradient-to-br from-rose-950/60 to-slate-900 border-rose-500/60'}`}>
+                          <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-vault mr-1.5"></i>Balance Neto (Ahorro Libre)</p>
+                          <h2 className={`text-2xl font-black ${balanceFinanciero.resultadoNetoUSD >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {balanceFinanciero.resultadoNetoUSD >= 0 ? '+' : '-'}{formatDinero(Math.abs(convertirParaMostrar(balanceFinanciero.resultadoNetoUSD, 'USD')))}
+                          </h2>
+                          <p className="text-[10px] text-slate-300 mt-1 font-mono">
+                            {balanceFinanciero.totalIngresosLimpiosUSD > 0 ? `Margen libre: ${balanceFinanciero.margenAhorro.toFixed(1)}%` : 'Sin ingresos en el período'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* DESGLOSE DE DE DÓNDE VINO TU GANANCIA */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-lg">
+                          <h4 className="text-xs font-bold text-white uppercase tracking-wider border-b border-slate-800 pb-2">
+                            <i className="fa-solid fa-chart-pie text-emerald-400 mr-1.5"></i>Origen de tus Ganancias en este período
+                          </h4>
+
+                          <div className="space-y-2.5 text-xs">
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center">
+                              <div>
+                                <p className="font-bold text-cyan-400"><i className="fa-solid fa-user mr-1.5"></i>Taller Clientes Particulares (Tu 50%)</p>
+                                <p className="text-[10px] text-slate-500">{balanceFinanciero.cantRepCliente} equipos reparados</p>
+                              </div>
+                              <span className="font-mono font-black text-white text-sm">+{formatDinero(convertirParaMostrar(balanceFinanciero.ganTallerClienteUSD, 'USD'))}</span>
+                            </div>
+
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center">
+                              <div>
+                                <p className="font-bold text-amber-400"><i className="fa-solid fa-building mr-1.5"></i>Taller Gremio / Mayorista (Tu 100% neto)</p>
+                                <p className="text-[10px] text-slate-500">{balanceFinanciero.cantRepGremio} equipos de gremio</p>
+                              </div>
+                              <span className="font-mono font-black text-white text-sm">+{formatDinero(convertirParaMostrar(balanceFinanciero.ganTallerGremioUSD, 'USD'))}</span>
+                            </div>
+
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center">
+                              <div>
+                                <p className="font-bold text-emerald-400"><i className="fa-solid fa-mobile-screen-button mr-1.5"></i>Comisiones por Venta de Equipos</p>
+                                <p className="text-[10px] text-slate-500">{balanceFinanciero.cantEquiposVendidos} equipos vendidos</p>
+                              </div>
+                              <span className="font-mono font-black text-white text-sm">+{formatDinero(convertirParaMostrar(balanceFinanciero.ganVentasUSD, 'USD'))}</span>
+                            </div>
+
+                            <div className="bg-slate-900/80 border border-amber-500/20 rounded-xl p-2.5 flex justify-between items-center text-[11px]">
+                              <span className="text-slate-400"><i className="fa-solid fa-rotate mr-1.5 text-amber-400"></i>Capital de repuestos recuperado (No es ganancia):</span>
+                              <span className="font-mono font-bold text-amber-400">{formatDinero(convertirParaMostrar(balanceFinanciero.recuperoRepuestosUSD, 'USD'))}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* DESGLOSE DE CAJA POR MEDIO DE PAGO */}
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-lg flex flex-col justify-between">
+                          <div className="space-y-3">
+                            <h4 className="text-xs font-bold text-white uppercase tracking-wider border-b border-slate-800 pb-2">
+                              <i className="fa-solid fa-money-check-dollar text-cyan-400 mr-1.5"></i>Cobros de Taller por Medio de Pago
+                            </h4>
+                            {balanceFinanciero.desgloseMetodos.length === 0 ? (
+                              <p className="text-xs text-slate-500 text-center py-6 border border-dashed border-slate-800 rounded-xl">
+                                Todavía no hay pagos parciales o totales registrados con método en este período.
+                              </p>
+                            ) : (
+                              <div className="space-y-2">
+                                {balanceFinanciero.desgloseMetodos.map((m, idx) => (
+                                  <div key={m.metodo} className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center text-xs">
+                                    <span className="font-bold text-white flex items-center gap-2">
+                                      <span className={`w-2.5 h-2.5 rounded-full ${COLORES_GRAFICO[idx % COLORES_GRAFICO.length]}`}></span>
+                                      {m.metodo}
+                                    </span>
+                                    <span className="font-mono font-black text-cyan-400 text-sm">
+                                      {formatDinero(convertirParaMostrar(m.montoUSD, 'USD'))}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1.5">
+                            <div className="flex justify-between text-[10px] font-bold uppercase">
+                              <span className="text-emerald-400">Ingresos Limpios</span>
+                              <span className="text-rose-400">Gastos Totales</span>
+                            </div>
+                            <div className="w-full bg-slate-900 rounded-full h-3 border border-slate-800 overflow-hidden flex">
+                              {(() => {
+                                const sumaAmbos = balanceFinanciero.totalIngresosLimpiosUSD + balanceFinanciero.totalGastosUSD;
+                                const porcIng = sumaAmbos > 0 ? (balanceFinanciero.totalIngresosLimpiosUSD / sumaAmbos) * 100 : 50;
+                                return (
+                                  <>
+                                    <div className="bg-emerald-500 h-full transition-all" style={{width: `${porcIng}%`}}></div>
+                                    <div className="bg-rose-500 h-full transition-all" style={{width: `${100 - porcIng}%`}}></div>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* PESTAÑA 2: ROTACIÓN DE BATERÍAS Y SIMULADOR DE COMPRA */}
+                  {tabStats === 'baterias' && (
+                    <div className="space-y-5 fade-in">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="bg-gradient-to-br from-purple-900/40 to-slate-900 border border-purple-500/30 rounded-2xl p-4 shadow-lg text-center">
+                          <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-battery-full mr-1.5"></i>Total Consumido</p>
+                          <h2 className="text-2xl sm:text-3xl font-black text-white">{estadisticasConsumo.totalUnidades} <span className="text-xs font-normal text-slate-400">unid.</span></h2>
+                          <p className="text-[10px] text-slate-400 mt-1">Según reparaciones finalizadas</p>
+                        </div>
+                        <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 shadow-lg text-center">
+                          <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-user mr-1.5"></i>Clientes Particulares (Minorista)</p>
+                          <h2 className="text-2xl sm:text-3xl font-black text-cyan-400">{estadisticasConsumo.totalCliente} <span className="text-sm font-bold text-slate-300">({estadisticasConsumo.porcentajeCliente.toFixed(1)}%)</span></h2>
+                          <p className="text-[10px] text-slate-500 mt-1">Reparaciones 50/50 en local</p>
+                        </div>
+                        <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4 shadow-lg text-center">
+                          <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-building mr-1.5"></i>Gremio / Mayorista</p>
+                          <h2 className="text-2xl sm:text-3xl font-black text-amber-400">{estadisticasConsumo.totalGremio} <span className="text-sm font-bold text-slate-300">({estadisticasConsumo.porcentajeGremio.toFixed(1)}%)</span></h2>
+                          <p className="text-[10px] text-slate-500 mt-1">Equipos de terceros / gremio</p>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Qué analizar</label>
+                            <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex">
+                              <button type="button" onClick={() => setFiltroStats({...filtroStats, tipo: 'baterias'})} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${filtroStats.tipo === 'baterias' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>Solo Baterías</button>
+                              <button type="button" onClick={() => setFiltroStats({...filtroStats, tipo: 'todos'})} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${filtroStats.tipo === 'todos' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>Todos los Repuestos</button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Período de tiempo</label>
+                            <select value={filtroStats.dias} onChange={e => setFiltroStats({...filtroStats, dias: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-purple-500">
+                              <option value="todos">Histórico Completo (Más preciso)</option>
+                              <option value="30">Últimos 30 días</option>
+                              <option value="90">Últimos 3 meses (90 días)</option>
+                              <option value="180">Últimos 6 meses (180 días)</option>
+                            </select>
+                          </div>
+
+                          <div className="bg-purple-950/30 border border-purple-500/40 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                            <div>
+                              <label className="text-[9px] font-black text-purple-300 uppercase block">Simulador de Pedido</label>
+                              <span className="text-[10px] text-slate-400">¿Cuántas vas a comprar en total?</span>
+                            </div>
+                            <input type="number" min="1" value={filtroStats.simuladorCompra} onChange={e => setFiltroStats({...filtroStats, simuladorCompra: e.target.value})} className="w-16 bg-slate-950 border border-purple-500 rounded-lg px-2 py-1 text-center font-mono font-black text-white text-sm focus:outline-none" />
+                          </div>
+                        </div>
+
+                        <div className="pt-2 space-y-3">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1 border-b border-slate-800 pb-2">
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                              <i className="fa-solid fa-ranking-star text-purple-400 mr-1.5"></i>Rotación vs. Stock Actual y Compra Inteligente
+                            </h3>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              En stock hoy: <strong className="text-amber-400">{estadisticasConsumo.totalStockAnalizado}</strong> + Pedido: <strong className="text-purple-400">{filtroStats.simuladorCompra || 0}</strong> = <strong className="text-white">{estadisticasConsumo.totalStockAnalizado + (parseInt(filtroStats.simuladorCompra) || 0)} unid. totales</strong>
+                            </span>
+                          </div>
+
+                          {estadisticasConsumo.items.length === 0 ? (
+                            <p className="text-center text-slate-500 py-6 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">
+                              Todavía no hay reparaciones finalizadas con baterías/repuestos en este período.
+                            </p>
+                          ) : (
+                            <div className="space-y-2.5">
+                              {estadisticasConsumo.items.map((item, i) => (
+                                <div key={item.nombre} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2 hover:border-slate-700 transition">
+                                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                                    <div>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="bg-slate-800 text-slate-300 font-mono font-black px-2 py-0.5 rounded text-[10px]">#{i + 1}</span>
+                                        <h4 className="font-black text-white text-sm">{item.nombre}</h4>
+                                        <span className="bg-purple-950 border border-purple-700 text-purple-300 px-2 py-0.5 rounded text-[10px] font-black">
+                                          {item.porcentaje.toFixed(1)}% de rotación
+                                        </span>
+                                        <span className="bg-slate-900 border border-amber-500/40 text-amber-400 px-2 py-0.5 rounded text-[10px] font-mono font-bold">
+                                          En Stock hoy: {item.stockActual} unid.
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-3 mt-1 text-[11px] flex-wrap">
+                                        <span className="text-slate-300 font-bold">Colocadas: <strong className="text-white">{item.total}</strong></span>
+                                        <span className="text-cyan-400"><i className="fa-solid fa-user mr-1"></i>Cliente: <strong>{item.cliente}</strong></span>
+                                        <span className="text-amber-400"><i className="fa-solid fa-building mr-1"></i>Gremio: <strong>{item.gremio}</strong></span>
+                                        <span className="text-slate-500 font-mono text-[10px]">• Stock ideal tras compra: <strong>{Math.round(item.stockIdeal)} unid.</strong></span>
+                                      </div>
+                                    </div>
+
+                                    <div className={`bg-slate-900 border rounded-lg px-3 py-1.5 text-right shrink-0 w-full sm:w-auto flex sm:block justify-between items-center ${item.sugerenciaCompra > 0 ? 'border-emerald-500/40' : 'border-slate-800'}`}>
+                                      <span className="text-[9px] text-slate-400 font-bold uppercase block">Sugerido p/ equilibrar stock:</span>
+                                      {item.sugerenciaCompra > 0 ? (
+                                        <span className="font-mono font-black text-emerald-400 text-sm">Comprar {item.sugerenciaCompra} unid.</span>
+                                      ) : (
+                                        <span className="font-mono font-bold text-slate-500 text-xs">Stock cubierto (0 unid.)</span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="w-full bg-slate-900 rounded-full h-2 border border-slate-800 overflow-hidden flex">
+                                    <div className={`h-full ${COLORES_GRAFICO[i % COLORES_GRAFICO.length]}`} style={{width: `${item.porcentaje}%`}}></div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
