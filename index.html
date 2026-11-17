@@ -209,10 +209,7 @@
                 gastosFijos: Array.isArray(data.payload.gastosFijos) ? data.payload.gastosFijos.filter(Boolean) : [],
                 gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
                 deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
-                deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean).map(d => {
-                    if(d.moneda !== 'USD'){ return { ...d, monto: (parseFloat(d.monto) / (data.payload.cotizacionDolar || 1500)).toFixed(4), moneda: 'USD' }; }
-                    return d;
-                }) : [],
+                deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean) : [],
                 stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean).map(s => {
                     if (s.moneda === 'ARS') {
                         const cotiRef = data.payload.cotizacionDolar || 1500;
@@ -554,23 +551,23 @@
         e.preventDefault();
         if (!nuevaDeudaCobrar.walletId) return alert('Seleccioná la billetera de origen.');
         const montoPrestado = parseFloat(nuevaDeudaCobrar.monto) || 0;
-        const op = procesarDescuentoSeguro(nuevaDeudaCobrar.walletId, montoPrestado, nuevaDeudaCobrar.moneda, db.activos);
+        const mon = nuevaDeudaCobrar.moneda || 'USD';
+        const op = procesarDescuentoSeguro(nuevaDeudaCobrar.walletId, montoPrestado, mon, db.activos);
         if (!op.success) return alert(op.msg);
 
-        const montoUSD = aUSDBase(montoPrestado, nuevaDeudaCobrar.moneda, db.cotizacionDolar);
         let deudasAc = [...(db.deudasCobrar || [])];
-        const idx = deudasAc.findIndex(d => d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() && d.motivo.trim().toLowerCase() === nuevaDeudaCobrar.motivo.trim().toLowerCase());
-        const nvoMov = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Préstamo manual`, detalle: `Original: ${montoPrestado} ${nuevaDeudaCobrar.moneda}`, montoUSD: montoUSD, tipo: 'cargo' };
+        const idx = deudasAc.findIndex(d => d.deudor.trim().toLowerCase() === nuevaDeudaCobrar.deudor.trim().toLowerCase() && d.motivo.trim().toLowerCase() === nuevaDeudaCobrar.motivo.trim().toLowerCase() && d.moneda === mon);
+        const nvoMov = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Préstamo manual`, detalle: `Original: ${montoPrestado} ${mon}`, monto: montoPrestado, moneda: mon, tipo: 'cargo' };
 
         let log;
         if (idx !== -1) {
-          deudasAc[idx].monto = (parseFloat(deudasAc[idx].monto) + montoUSD).toFixed(4);
+          deudasAc[idx].monto = redondear(parseFloat(deudasAc[idx].monto) + montoPrestado);
           deudasAc[idx].movimientos = [nvoMov, ...(deudasAc[idx].movimientos || [])];
-          log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} a "${deudasAc[idx].deudor}".`, deudasAc[idx]);
+          log = generarLog('Aumentó Deuda a Favor', `Prestó ${montoPrestado} ${mon} a "${deudasAc[idx].deudor}".`, deudasAc[idx]);
         } else {
-          const item = { id: Date.now(), fechaTimestamp: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), motivo: nuevaDeudaCobrar.motivo.trim(), monto: montoUSD.toFixed(4), moneda: 'USD', fecha: new Date().toLocaleDateString(), movimientos: [nvoMov] };
+          const item = { id: Date.now(), fechaTimestamp: Date.now(), deudor: nuevaDeudaCobrar.deudor.trim(), motivo: nuevaDeudaCobrar.motivo.trim(), monto: redondear(montoPrestado), moneda: mon, fecha: new Date().toLocaleDateString(), movimientos: [nvoMov] };
           deudasAc.unshift(item);
-          log = generarLog('Creó Cuenta a Cobrar', `Prestó ${montoPrestado} ${nuevaDeudaCobrar.moneda} a "${item.deudor}".`, item);
+          log = generarLog('Creó Cuenta a Cobrar', `Prestó ${montoPrestado} ${mon} a "${item.deudor}".`, item);
         }
         guardarEnNube({ ...db, activos: op.activosActualizados, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
@@ -580,17 +577,23 @@
         if (!cobroDeudaActivo.walletId || !cobroDeudaActivo.montoCobro) return alert('Completá los datos.');
         const cobroFisico = parseFloat(cobroDeudaActivo.montoCobro);
         if (cobroFisico <= 0) return alert('Monto inválido.');
-        const abonoBaseUSD = aUSDBase(cobroFisico, cobroDeudaActivo.monedaCobro, db.cotizacionDolar);
-        if (redondear(abonoBaseUSD) > parseFloat(itemDeuda.monto) + 0.05) return alert('No podés cobrar de más.');
+
+        const monedaDeuda = itemDeuda.moneda || 'USD';
+        let abonoConvertido = cobroFisico;
+        if (cobroDeudaActivo.monedaCobro === 'ARS' && monedaDeuda === 'USD') abonoConvertido = cobroFisico / db.cotizacionDolar;
+        if (cobroDeudaActivo.monedaCobro === 'USD' && monedaDeuda === 'ARS') abonoConvertido = cobroFisico * db.cotizacionDolar;
+
+        if (redondear(abonoConvertido) > parseFloat(itemDeuda.monto) + 0.5) return alert('No podés cobrar más de lo que te deben.');
 
         const activosAc = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroFisico, cobroDeudaActivo.monedaCobro, db.activos);
         const wUsada = activosAc.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
-        const nvoMonto = parseFloat(itemDeuda.monto) - abonoBaseUSD;
-        const movAbono = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Pago recibido (a ${wUsada})`, detalle: `Entregó: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`, montoUSD: abonoBaseUSD, tipo: 'abono' };
+        const nvoMonto = parseFloat(itemDeuda.monto) - abonoConvertido;
+        const movAbono = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Pago recibido (a ${wUsada})`, detalle: `Entregó: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`, monto: abonoConvertido, moneda: monedaDeuda, tipo: 'abono' };
 
         let deudasAc = [];
-        if (nvoMonto <= 0.05) deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
-        else deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: nvoMonto.toFixed(4), movimientos: [movAbono, ...(d.movimientos || [])] } : d);
+        const umbralCierre = monedaDeuda === 'ARS' ? 10 : 0.05;
+        if (nvoMonto <= umbralCierre) deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
+        else deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: monedaDeuda === 'ARS' ? Math.round(nvoMonto) : redondear(nvoMonto), movimientos: [movAbono, ...(d.movimientos || [])] } : d);
 
         const log = generarLog('Registró Cobro', `Recibió ${cobroFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Entró a ${wUsada}.`);
         guardarEnNube({ ...db, activos: activosAc, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -858,17 +861,17 @@
               regVenta = { id: tsNow, fechaTimestamp: tsNow, fecha: fechaHoy, cantidad: cant, comisionUnitaria: comiUnit, totalComision: totalComi, moneda: nuevaVenta.moneda };
               ventasAc.unshift(regVenta);
           }
-          const comiUSD = aUSDBase(totalComi, nuevaVenta.moneda, db.cotizacionDolar);
+          const monVenta = nuevaVenta.moneda || 'ARS';
           let deudasCobrarAc = [...(db.deudasCobrar || [])];
           const deudor = "Local / Negocio (Ventas)";
           const motivo = "Comisiones de Venta de Equipos";
-          const movVenta = { id: Date.now() + 2, fecha: fechaHoy, titulo: `Venta de ${cant} ${cant === 1 ? 'equipo' : 'equipos'}`, detalle: `Comisión: ${totalComi} ${nuevaVenta.moneda}`, montoUSD: comiUSD, tipo: 'cargo' };
-          const idxCobrar = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivo);
+          const movVenta = { id: Date.now() + 2, fecha: fechaHoy, titulo: `Venta de ${cant} ${cant === 1 ? 'equipo' : 'equipos'}`, detalle: `Comisión: $ ${totalComi.toLocaleString('es-AR')} ${monVenta}`, monto: totalComi, moneda: monVenta, tipo: 'cargo' };
+          const idxCobrar = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivo && d.moneda === monVenta);
           if (idxCobrar !== -1) {
-              deudasCobrarAc[idxCobrar].monto = (parseFloat(deudasCobrarAc[idxCobrar].monto) + comiUSD).toFixed(4); 
+              deudasCobrarAc[idxCobrar].monto = monVenta === 'ARS' ? Math.round(parseFloat(deudasCobrarAc[idxCobrar].monto) + totalComi) : redondear(parseFloat(deudasCobrarAc[idxCobrar].monto) + totalComi); 
               deudasCobrarAc[idxCobrar].movimientos = [movVenta, ...(deudasCobrarAc[idxCobrar].movimientos || [])];
           } else {
-              deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo, monto: comiUSD.toFixed(4), moneda: 'USD', fecha: fechaHoy, movimientos: [movVenta] });
+              deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo, monto: monVenta === 'ARS' ? Math.round(totalComi) : redondear(totalComi), moneda: monVenta, fecha: fechaHoy, movimientos: [movVenta] });
           }
           const log = generarLog('Registró Venta', `Vendió ${cant} equipos. Sumó ${totalComi.toFixed(2)} ${nuevaVenta.moneda} a Cuentas a Cobrar.`, regVenta);
           guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
@@ -1399,7 +1402,7 @@
       const tActFisUSD = (db.activos || []).filter(a => a.tipo === 'activo').reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tStkUSD = (db.stock || []).reduce((acc, item) => acc + ((item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar) * parseInt(item.cantidad)), 0);
       const tDeudPenUSD = (db.deudas || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
-      const tDeudCobUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + parseFloat(item.monto), 0); 
+      const tDeudCobUSD = (db.deudasCobrar || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0); 
       
       const tGastFijUSD = (db.gastosFijos || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
       const tGastPuntUSD = (db.gastosPuntuales || []).reduce((acc, item) => acc + (item.moneda==='USD'?parseFloat(item.monto):parseFloat(item.monto)/db.cotizacionDolar), 0);
@@ -2772,6 +2775,7 @@
                             <div>
                               <p className="font-black text-white text-sm sm:text-base">{item.deudor}</p>
                               <p className="text-xs text-slate-400 italic">"{item.motivo}"</p>
+                              {!modoPrivado && <p className="text-[10px] text-slate-500 font-mono mt-0.5">Fijado en: {item.moneda === 'ARS' ? `$ ${Math.round(parseFloat(item.monto)).toLocaleString('es-AR')} ARS` : `U$D ${redondear(parseFloat(item.monto))} USD`}</p>}
                             </div>
                             <div className="text-right">
                               <span className="font-mono font-black text-emerald-400 text-lg">+{formatDinero(convertirParaMostrar(item.monto, item.moneda, monedaVisual), monedaVisual)}</span>
@@ -2828,8 +2832,8 @@
                                         <p className="text-[11px] text-slate-400 mt-0.5">{m.detalle}</p>
                                       </div>
                                       <span className={`font-mono font-black shrink-0 ${m.tipo === 'abono' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                        {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.montoUSD, 'USD', monedaVisual), monedaVisual)}
-                                      </span>
+                                          {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.monto !== undefined ? m.monto : m.montoUSD, m.moneda || 'USD', monedaVisual), monedaVisual)}
+                                        </span>
                                     </div>
                                   ))}
                                 </div>
