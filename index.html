@@ -102,7 +102,8 @@
       cobrar: 'Cuentas a Cobrar',
       deudas: 'Deudas a Otros',
       stock: 'Stock Repuestos',
-      estadisticas: 'Estadísticas de Consumo y Compra',
+      estadisticas: 'Estadísticas',
+      cuotas: 'Calculadora de Cuotas Posnet',
       actividad: 'Auditoría (Logs)'
     };
 
@@ -136,6 +137,23 @@
       const [filtroStock, setFiltroStock] = useState({ busqueda: '', soloCritico: false, orden: 'modelo_az' });
       const [desgloseStockKey, setDesgloseStockKey] = useState(null);
       const [mostrarCotizador, setMostrarCotizador] = useState(false);
+      const [calcCuotas, setCalcCuotas] = useState({
+        concepto: '',
+        monto: '',
+        moneda: 'USD',
+        extraDolar: '100',
+        redondeo: '100',
+        incluirContado: true,
+        mostrarTotalEnTexto: false,
+        copiado: false,
+        planes: [
+          { cuotas: 3, recargo: 22, activo: true },
+          { cuotas: 6, recargo: 33, activo: true },
+          { cuotas: 9, recargo: 50, activo: true },
+          { cuotas: 12, recargo: 60, activo: true },
+          { cuotas: 18, recargo: 100, activo: true }
+        ]
+      });
       const [cotizador, setCotizador] = useState({
         modoVista: 'lista', modoCalculo: 'escalera', gananciaObjetivoUSD: '19', escalonUSD: '3.5', multGremio: '2.5', baseGremioUSD: '10',
         redondeoARS: '1000', soloBateriasLista: true, copiadoTipo: '', preciosManualesARS: {},
@@ -1710,6 +1728,7 @@
                   {stockCriticoCount > 0 && <span className="bg-rose-600 text-white font-black px-1.5 py-0.2 rounded-full text-[10px]">{stockCriticoCount}</span>}
                 </button>
                 <button onClick={() => {setVista('estadisticas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'estadisticas' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-chart-simple w-4 text-center"></i> Estadísticas </button>
+                <button onClick={() => {setVista('cuotas'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${vista === 'cuotas' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-credit-card w-4 text-center"></i> Cuotas Posnet</button>
                 <button onClick={() => {setVista('actividad'); setMenuAbierto(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border border-indigo-500/30 ${vista === 'actividad' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><i className="fa-solid fa-shield-halved w-4 text-center text-indigo-400"></i> Auditoría (Logs)</button>
               </div>
             </nav>
@@ -4383,6 +4402,200 @@
                 </div>
               )}
 
+              {/* VISTA NUEVA: CALCULADORA DE CUOTAS POSNET (VENTAS Y REPARACIONES) */}
+              {vista === 'cuotas' && (() => {
+                const montoNum = parseFloat(calcCuotas.monto) || 0;
+                const extraNum = parseFloat(calcCuotas.extraDolar) || 0;
+                const dolarContado = parseFloat(db.cotizacionDolar) || 1500;
+                const dolarPosnet = dolarContado + extraNum;
+                const pasoRedondeo = parseInt(calcCuotas.redondeo) || 1;
+
+                const baseContadoARS = calcCuotas.moneda === 'USD' ? Math.round(montoNum * dolarContado) : Math.round(montoNum);
+                const basePosnetARS = calcCuotas.moneda === 'USD' ? Math.round(montoNum * dolarPosnet) : Math.round(montoNum);
+
+                const planesCalculados = (calcCuotas.planes || []).map((p, idx) => {
+                  const rec = parseFloat(p.recargo) || 0;
+                  const totalBruto = basePosnetARS * (1 + (rec / 100));
+                  const cuotaBruta = totalBruto / p.cuotas;
+                  const valorCuota = pasoRedondeo > 1 ? Math.round(cuotaBruta / pasoRedondeo) * pasoRedondeo : Math.round(cuotaBruta);
+                  const totalFinal = pasoRedondeo > 1 ? (valorCuota * p.cuotas) : Math.round(totalBruto);
+                  return { ...p, idx, valorCuota, totalFinal };
+                });
+
+                const togglePlanCuota = (idx) => {
+                  const copia = calcCuotas.planes.map((p, i) => i === idx ? { ...p, activo: !p.activo } : p);
+                  setCalcCuotas({ ...calcCuotas, planes: copia });
+                };
+
+                const cambiarRecargoPlan = (idx, nuevoRec) => {
+                  const copia = calcCuotas.planes.map((p, i) => i === idx ? { ...p, recargo: nuevoRec } : p);
+                  setCalcCuotas({ ...calcCuotas, planes: copia });
+                };
+
+                const armarTextoWhatsapp = () => {
+                  if (montoNum <= 0) return '';
+                  const lineas = [];
+                  if (calcCuotas.concepto.trim()) {
+                    lineas.push(`📱 *${calcCuotas.concepto.trim()}*`);
+                  }
+                  if (calcCuotas.incluirContado) {
+                    if (calcCuotas.moneda === 'USD') {
+                      lineas.push(`💵 Efectivo / Transferencia: *U$D ${montoNum.toLocaleString('es-AR')}* ($${baseContadoARS.toLocaleString('es-AR')})`);
+                    } else {
+                      lineas.push(`💵 Efectivo / Transferencia: *$${baseContadoARS.toLocaleString('es-AR')}*`);
+                    }
+                  }
+                  lineas.push(`💳 *Tarjeta de Crédito (Cuotas Fijas):*`);
+                  planesCalculados.filter(p => p.activo).forEach(p => {
+                    const txtTotal = calcCuotas.mostrarTotalEnTexto ? ` (Total: $${p.totalFinal.toLocaleString('es-AR')})` : '';
+                    lineas.push(`• *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
+                  });
+                  return lineas.join('\n');
+                };
+
+                const copiarCuotasCliente = () => {
+                  const texto = armarTextoWhatsapp();
+                  if (!texto) return alert('Ingresá un monto primero para calcular las cuotas.');
+                  navigator.clipboard.writeText(texto);
+                  setCalcCuotas({ ...calcCuotas, copiado: true });
+                  setTimeout(() => setCalcCuotas(prev => ({ ...prev, copiado: false })), 2500);
+                };
+
+                return (
+                  <div className="max-w-4xl mx-auto space-y-5 fade-in">
+                    {/* TARJETA DE INGRESO DE MONTO Y CONFIGURACIÓN */}
+                    <div className="bg-slate-900 border border-indigo-500/30 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-3">
+                        <div>
+                          <h3 className="text-sm font-black text-white flex items-center gap-2">
+                            <i className="fa-solid fa-credit-card text-indigo-400"></i> Simulador de Cuotas Posnet
+                          </h3>
+                          <p className="text-[11px] text-slate-400">Sirve para cotizar ventas de equipos y reparaciones en cuotas fijas al instante.</p>
+                        </div>
+                        <div className="bg-indigo-950/60 border border-indigo-500/40 rounded-xl px-3 py-1.5 text-right shrink-0">
+                          <span className="text-[9px] font-bold text-indigo-300 uppercase block">Dólar Posnet Aplicado</span>
+                          <span className="font-mono font-black text-white text-sm">
+                            $ {dolarPosnet.toLocaleString('es-AR')} <span className="text-[10px] font-normal text-indigo-300">(${dolarContado} + ${extraNum})</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                        <div className="sm:col-span-4">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Equipo o Reparación (Opcional)</label>
+                          <input type="text" placeholder="Ej: iPhone 15 Pro 256GB / Bat. 13 Pro" value={calcCuotas.concepto} onChange={e => setCalcCuotas({...calcCuotas, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-indigo-500" />
+                        </div>
+
+                        <div className="sm:col-span-4">
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Precio Base</label>
+                          <div className="flex">
+                            <input type="number" step="any" placeholder="Ej: 650 o 110000" value={calcCuotas.monto} onChange={e => setCalcCuotas({...calcCuotas, monto: e.target.value})} className="w-full min-w-0 bg-slate-950 border border-indigo-500/60 rounded-l-xl px-3 py-2 text-white font-mono font-black text-sm focus:outline-none" />
+                            <select value={calcCuotas.moneda} onChange={e => setCalcCuotas({...calcCuotas, moneda: e.target.value})} className="bg-slate-950 border border-indigo-500/60 border-l-0 rounded-r-xl px-3 py-2 text-white text-xs font-black">
+                              <option value="USD">USD</option>
+                              <option value="ARS">ARS</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">Extra Dólar ($)</label>
+                          <input type="number" step="10" disabled={calcCuotas.moneda === 'ARS'} value={calcCuotas.extraDolar} onChange={e => setCalcCuotas({...calcCuotas, extraDolar: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-amber-400 font-mono font-bold text-xs disabled:opacity-40 text-center" />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Redondeo Cuota</label>
+                          <select value={calcCuotas.redondeo} onChange={e => setCalcCuotas({...calcCuotas, redondeo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-white font-mono text-xs">
+                            <option value="1">Exacto ($1)</option>
+                            <option value="100">Cada $100</option>
+                            <option value="500">Cada $500</option>
+                            <option value="1000">Cada $1.000</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* RESUMEN DE BASE DE CÁLCULO */}
+                      {montoNum > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center text-xs">
+                            <span className="text-slate-400 font-bold">Precio Contado (Dólar ${dolarContado}):</span>
+                            <span className="font-mono font-black text-emerald-400 text-sm">
+                              {calcCuotas.moneda === 'USD' ? `U$D ${montoNum.toLocaleString('es-AR')} • ` : ''}$ {baseContadoARS.toLocaleString('es-AR')} ARS
+                            </span>
+                          </div>
+                          <div className="bg-indigo-950/30 border border-indigo-500/40 rounded-xl p-3 flex justify-between items-center text-xs">
+                            <span className="text-indigo-300 font-bold">Base 1 Pago Posnet {calcCuotas.moneda === 'USD' ? `(Dólar $${dolarPosnet})` : '(Directo ARS)'}:</span>
+                            <span className="font-mono font-black text-white text-sm">$ {basePosnetARS.toLocaleString('es-AR')} ARS</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* GRILLA DE PLANES DE CUOTAS */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {planesCalculados.map(p => (
+                        <div key={p.cuotas} className={`rounded-2xl p-4 border transition flex flex-col justify-between gap-3 shadow-lg ${p.activo ? 'bg-slate-900 border-indigo-500/40' : 'bg-slate-950/60 border-slate-800 opacity-50'}`}>
+                          <div className="flex justify-between items-center">
+                            <button type="button" onClick={() => togglePlanCuota(p.idx)} className="flex items-center gap-2 text-left">
+                              <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] border ${p.activo ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-slate-900 border-slate-700 text-slate-500'}`}>
+                                {p.activo && <i className="fa-solid fa-check"></i>}
+                              </span>
+                              <span className="font-black text-white text-base">{p.cuotas} Cuotas</span>
+                            </button>
+
+                            <div className="flex items-center bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5">
+                              <span className="text-[10px] text-rose-400 font-bold mr-1">+</span>
+                              <input type="number" step="any" value={p.recargo} onChange={e => cambiarRecargoPlan(p.idx, e.target.value)} className="w-10 bg-transparent text-rose-400 font-mono font-black text-xs text-center focus:outline-none" />
+                              <span className="text-[10px] text-rose-400 font-bold">%</span>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-center">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase block">Cuota Fija Mensual</span>
+                            <span className="font-mono font-black text-emerald-400 text-xl block mt-0.5">
+                              $ {p.valorCuota.toLocaleString('es-AR')}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center text-[11px] px-1">
+                            <span className="text-slate-400">Total a cargar en Posnet:</span>
+                            <span className="font-mono font-bold text-white">$ {p.totalFinal.toLocaleString('es-AR')}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* VISTA PREVIA DEL MENSAJE Y BOTÓN COPIAR PARA WHATSAPP */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3 shadow-lg">
+                      <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                            <i className="fa-brands fa-whatsapp text-emerald-400 mr-1.5 text-sm"></i>Mensaje listo para pasar al cliente
+                          </h4>
+                          <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <input type="checkbox" checked={calcCuotas.incluirContado} onChange={e => setCalcCuotas({...calcCuotas, incluirContado: e.target.checked})} className="accent-emerald-500" />
+                            Incluir precio contado
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <input type="checkbox" checked={calcCuotas.mostrarTotalEnTexto} onChange={e => setCalcCuotas({...calcCuotas, mostrarTotalEnTexto: e.target.checked})} className="accent-indigo-500" />
+                            Mostrar total financiado
+                          </label>
+                        </div>
+
+                        <button type="button" onClick={copiarCuotasCliente} disabled={montoNum <= 0} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black px-4 py-2 rounded-xl text-xs transition flex items-center gap-2 shadow-md">
+                          <i className={`fa-solid ${calcCuotas.copiado ? 'fa-check' : 'fa-copy'}`}></i>
+                          {calcCuotas.copiado ? '¡Copiado para WhatsApp!' : 'Copiar Lista de Cuotas'}
+                        </button>
+                      </div>
+
+                      <pre className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs text-slate-200 font-sans whitespace-pre-wrap leading-relaxed min-h-[90px]">
+                        {montoNum > 0
+                          ? armarTextoWhatsapp()
+                          : 'Ingresá un precio arriba en USD o ARS para ver la vista previa lista para copiar y pegar en WhatsApp.'}
+                      </pre>
+                    </div>
+                  </div>
+                );
+              })()}
               {/* VISTA 9: AUDITORÍA */}
               {vista === 'actividad' && (
                 <div className="max-w-5xl mx-auto space-y-5 fade-in">
