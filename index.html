@@ -137,8 +137,8 @@
       const [desgloseStockKey, setDesgloseStockKey] = useState(null);
       const [mostrarCotizador, setMostrarCotizador] = useState(false);
       const [cotizador, setCotizador] = useState({
-        modoVista: 'individual', modoCalculo: 'fijo', gananciaObjetivoUSD: '20', multGremio: '3', baseGremioUSD: '10',
-        redondeoARS: '1000', soloBateriasLista: true, copiadoTipo: '',
+        modoVista: 'lista', modoCalculo: 'escalera', gananciaObjetivoUSD: '19', escalonUSD: '3.5', multGremio: '2.5', baseGremioUSD: '10',
+        redondeoARS: '1000', soloBateriasLista: true, copiadoTipo: '', preciosManualesARS: {},
         grupoKey: '', busq: '', menuAbierto: false, precioCliente: '', monedaCliente: 'ARS'
       });
       const [mostrarPedidoMasivo, setMostrarPedidoMasivo] = useState(false);
@@ -3098,14 +3098,50 @@
                         return aUSDBase(ult.monto, ult.moneda, db.cotizacionDolar);
                       };
 
+                      // Detecta Generación (11, 12, 13, 14, 15, 16) y Gama (Mini=0, Base=1, Plus=2, Pro=3, Pro Max=4)
+                      const analizarJerarquiaIphone = (nombreRaw) => {
+                        const low = (nombreRaw || '').toLowerCase();
+                        let gen = 99;
+                        const matchNum = low.match(/\b(1[1-7])\b/);
+                        if (matchNum) gen = parseInt(matchNum[1]);
+                        else if (low.includes('xs') || low.includes('xr')) gen = 10.5;
+                        else if (low.includes(' x')) gen = 10;
+                        else if (low.includes('8')) gen = 8;
+                        else if (low.includes('se')) gen = 9;
+
+                        let tier = 1; // Base por defecto
+                        let sufijo = '';
+                        if (low.includes('pro max') || low.includes('promax')) { tier = 4; sufijo = ' Pro Max'; }
+                        else if (low.includes('pro')) { tier = 3; sufijo = ' Pro'; }
+                        else if (low.includes('plus')) { tier = 2; sufijo = ' Plus'; }
+                        else if (low.includes('mini')) { tier = 0; sufijo = ' Mini'; }
+
+                        const nombreLimpio = gen < 99 ? `iPhone ${gen}${sufijo}` : nombreRaw.replace(/batería|bateria/gi, '').trim();
+                        const ordenSort = (gen * 10) + tier;
+
+                        // Puntaje de escalera (0 en 13 Base, sube por versión y por generación)
+                        const genBase = gen >= 11 && gen < 99 ? (gen - 13) : 0;
+                        const pesoTier = tier === 4 ? 2.6 : tier === 3 ? 1.8 : tier === 2 ? 0.6 : 0;
+                        const escalonesExtra = Math.max(0, (genBase * 1.6) + pesoTier);
+
+                        return { gen, tier, nombreLimpio, ordenSort, escalonesExtra };
+                      };
+
                       const costoRepUSD = obtenerCostoGrupoUSD(grupoSel);
                       const costoRepARS = Math.round(costoRepUSD * db.cotizacionDolar);
                       const baseGremio = parseFloat(cotizador.baseGremioUSD) || 10;
+                      const baseGanUSD = parseFloat(cotizador.gananciaObjetivoUSD) || 19;
+                      const pasoEscalonUSD = parseFloat(cotizador.escalonUSD) || 3.5;
 
-                      // Ganancia limpia objetivo (tu 50%) según el modo elegido
-                      const gananciaMiaObjetivoUSD = cotizador.modoCalculo === 'mult_gremio'
-                        ? (parseFloat(cotizador.multGremio) || 0) * baseGremio
-                        : (parseFloat(cotizador.gananciaObjetivoUSD) || 0);
+                      const calcularGananciaObjetivoModelo = (escalonesExtra = 0) => {
+                        if (cotizador.modoCalculo === 'mult_gremio') {
+                          return (parseFloat(cotizador.multGremio) || 0) * baseGremio;
+                        }
+                        if (cotizador.modoCalculo === 'escalera') {
+                          return baseGanUSD + (escalonesExtra * pasoEscalonUSD);
+                        }
+                        return baseGanUSD;
+                      };
 
                       const redondearPesos = (valorARS) => {
                         const red = parseInt(cotizador.redondeoARS) || 1;
@@ -3120,6 +3156,9 @@
                           : redondear(totalClienteUSD);
                       };
 
+                      const infoGrupoSel = grupoSel ? analizarJerarquiaIphone(grupoSel.concepto) : { escalonesExtra: 0 };
+                      const gananciaMiaObjetivoIndivUSD = calcularGananciaObjetivoModelo(infoGrupoSel.escalonesExtra);
+
                       const precioCliNum = parseFloat(cotizador.precioCliente) || 0;
                       const precioCliUSD = cotizador.monedaCliente === 'ARS' ? (precioCliNum / db.cotizacionDolar) : precioCliNum;
                       const precioCliARS = cotizador.monedaCliente === 'ARS' ? precioCliNum : Math.round(precioCliNum * db.cotizacionDolar);
@@ -3133,141 +3172,215 @@
                       const precioGremioUSD = redondear(costoRepUSD + baseGremio);
                       const precioGremioARS = Math.round(precioGremioUSD * db.cotizacionDolar);
 
-                      // Lista completa de precios calculada automáticamente para cada modelo en stock
-                      const modelosParaLista = stockAgrupado
+                      // Armamos la lista base desde el stock + inyectamos automáticamente iPhone 14 Pro si existe Batería 13 Pro
+                      let baseItemsLista = stockAgrupado
                         .filter(g => !cotizador.soloBateriasLista || esTextoBateria(g.concepto))
-                        .map(g => {
-                          const cUSD = obtenerCostoGrupoUSD(g);
-                          const totalCliUSD = cUSD + (gananciaMiaObjetivoUSD * 2);
-                          const totalCliARS = redondearPesos(totalCliUSD * db.cotizacionDolar);
-                          const gremioUSD = redondear(cUSD + baseGremio);
-                          const gremioARS = redondearPesos(gremioUSD * db.cotizacionDolar);
-                          return {
-                            concepto: g.concepto,
-                            stock: g.cantidadTotal,
-                            costoUSD: redondear(cUSD),
-                            gananciaMiaUSD: redondear(gananciaMiaObjetivoUSD),
-                            sacaLocalUSD: redondear(gananciaMiaObjetivoUSD),
-                            precioClienteARS: totalCliARS,
-                            precioClienteUSD: redondear(totalCliUSD),
-                            precioGremioUSD: gremioUSD,
-                            precioGremioARS: gremioARS
-                          };
+                        .map(g => ({ ...g, esCompatible: false, notaCompat: '' }));
+
+                      const bat13Pro = baseItemsLista.find(g => {
+                        const j = analizarJerarquiaIphone(g.concepto);
+                        return j.gen === 13 && j.tier === 3;
+                      });
+                      const existe14Pro = baseItemsLista.some(g => {
+                        const j = analizarJerarquiaIphone(g.concepto);
+                        return j.gen === 14 && j.tier === 3;
+                      });
+
+                      if (bat13Pro && !existe14Pro) {
+                        baseItemsLista.push({
+                          ...bat13Pro,
+                          key: 'virtual_14_pro',
+                          concepto: 'Bateria 14 Pro',
+                          esCompatible: true,
+                          notaCompat: 'Usa Bat. 13 Pro'
                         });
+                      }
+
+                      // Ordenamos por jerarquía Apple (13 -> 13 Pro -> 13 Pro Max -> 14 -> 14 Pro -> 14 Pro Max -> 15...)
+                      const itemsOrdenados = baseItemsLista
+                        .map(g => ({ ...g, jerarquia: analizarJerarquiaIphone(g.concepto) }))
+                        .sort((a, b) => a.jerarquia.ordenSort - b.jerarquia.ordenSort);
+
+                      // Calculamos precios y garantizamos que ningún modelo superior quede más barato que el escalón anterior
+                      let pisoPrecioAnteriorARS = 0;
+                      const modelosParaLista = itemsOrdenados.map(g => {
+                        const cUSD = obtenerCostoGrupoUSD(g);
+                        const ganSugeridaUSD = calcularGananciaObjetivoModelo(g.jerarquia.escalonesExtra);
+                        const totalCliSugUSD = cUSD + (ganSugeridaUSD * 2);
+                        let precioSugARS = redondearPesos(totalCliSugUSD * db.cotizacionDolar);
+
+                        if (cotizador.modoCalculo === 'escalera' && precioSugARS < pisoPrecioAnteriorARS) {
+                          precioSugARS = pisoPrecioAnteriorARS;
+                        }
+                        pisoPrecioAnteriorARS = precioSugARS;
+
+                        const manualARS = cotizador.preciosManualesARS?.[g.jerarquia.nombreLimpio];
+                        const precioFinalARS = manualARS !== undefined && manualARS !== '' ? (parseFloat(manualARS) || 0) : precioSugARS;
+                        const precioFinalUSD = precioFinalARS / db.cotizacionDolar;
+                        const manoObraRealUSD = Math.max(0, precioFinalUSD - cUSD);
+                        const ganMiaRealUSD = manoObraRealUSD / 2;
+
+                        const gremioUSD = redondear(cUSD + baseGremio);
+                        const gremioARS = redondearPesos(gremioUSD * db.cotizacionDolar);
+
+                        return {
+                          key: g.key,
+                          nombreLista: g.jerarquia.nombreLimpio,
+                          conceptoStock: g.concepto,
+                          esCompatible: g.esCompatible,
+                          notaCompat: g.notaCompat,
+                          stock: g.cantidadTotal,
+                          costoUSD: redondear(cUSD),
+                          gananciaMiaUSD: redondear(ganMiaRealUSD),
+                          sacaLocalUSD: redondear(ganMiaRealUSD),
+                          precioSugeridoARS: precioSugARS,
+                          precioClienteARS: precioFinalARS,
+                          precioClienteUSD: redondear(precioFinalUSD),
+                          tieneAjusteManual: manualARS !== undefined && manualARS !== '',
+                          precioGremioUSD: gremioUSD,
+                          precioGremioARS: gremioARS
+                        };
+                      });
+
+                      const cambiarPrecioManualFila = (nombreModelo, nuevoValorARS) => {
+                        setCotizador({
+                          ...cotizador,
+                          preciosManualesARS: {
+                            ...(cotizador.preciosManualesARS || {}),
+                            [nombreModelo]: nuevoValorARS
+                          }
+                        });
+                      };
 
                       const copiarListaAlPortapapeles = (tipo) => {
                         if (modelosParaLista.length === 0) return;
                         const lineas = modelosParaLista.map(m => {
-                          if (tipo === 'cliente_ars') return `• ${m.concepto}: $ ${m.precioClienteARS.toLocaleString('es-AR')} ARS`;
-                          if (tipo === 'gremio_usd') return `• ${m.concepto}: U$D ${m.precioGremioUSD} ($ ${m.precioGremioARS.toLocaleString('es-AR')})`;
-                          return `• ${m.concepto}: $ ${m.precioClienteARS.toLocaleString('es-AR')} (U$D ${m.precioClienteUSD})`;
+                          if (tipo === 'cliente_ars') return `${m.nombreLista} - $${m.precioClienteARS.toLocaleString('es-AR')}`;
+                          return `${m.nombreLista} - U$D ${m.precioGremioUSD} ($${m.precioGremioARS.toLocaleString('es-AR')})`;
                         });
-                        const encabezado = tipo === 'gremio_usd'
-                          ? `🔋 *LISTA MAYORISTA / GREMIO (Dólar $${db.cotizacionDolar})*\n`
-                          : `🔋 *LISTA DE PRECIOS CAMBIO DE BATERÍA*\n`;
-                        navigator.clipboard.writeText(encabezado + lineas.join('\n'));
+                        navigator.clipboard.writeText(lineas.join('\n'));
                         setCotizador({ ...cotizador, copiadoTipo: tipo });
                         setTimeout(() => setCotizador(prev => ({ ...prev, copiadoTipo: '' })), 2500);
                       };
 
                       return (
                         <div className="bg-slate-950 border-2 border-cyan-500/50 rounded-2xl p-4 space-y-4 shadow-xl fade-in">
-                          {/* PESTAÑAS INTERNAS: INDIVIDUAL VS LISTA DE PRECIOS COMPLETA */}
+                          {/* PESTAÑAS INTERNAS: INDIVIDUAL VS LISTA DE PRECIOS EN ESCALERA */}
                           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-3">
                             <div>
-                              <h4 className="text-xs font-black text-cyan-400 uppercase tracking-wider"><i className="fa-solid fa-calculator mr-1.5"></i>Centro de Precios y Cotizador 50/50</h4>
-                              <p className="text-[11px] text-slate-400">Calcula automáticamente el doble de mano de obra para cubrir el 50% del local.</p>
+                              <h4 className="text-xs font-black text-cyan-400 uppercase tracking-wider"><i className="fa-solid fa-stairs mr-1.5"></i>Lista de Precios en Escalera y Cotizador 50/50</h4>
+                              <p className="text-[11px] text-slate-400">Ordenado por jerarquía Apple (13 → 14 → 15) con compatibilidad automática 13 Pro / 14 Pro.</p>
                             </div>
                             <div className="bg-slate-900 p-1 rounded-xl border border-slate-800 flex w-full sm:w-auto">
+                              <button type="button" onClick={() => setCotizador({...cotizador, modoVista: 'lista'})} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-black transition ${cotizador.modoVista === 'lista' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                                📋 Lista en Escalera ({modelosParaLista.length})
+                              </button>
                               <button type="button" onClick={() => setCotizador({...cotizador, modoVista: 'individual'})} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-black transition ${cotizador.modoVista === 'individual' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
                                 🧮 Cotizar 1 Equipo
-                              </button>
-                              <button type="button" onClick={() => setCotizador({...cotizador, modoVista: 'lista'})} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-black transition ${cotizador.modoVista === 'lista' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
-                                📋 Armar Lista de Precios ({modelosParaLista.length})
                               </button>
                             </div>
                           </div>
 
-                          {/* REGLA DE GANANCIA (PERSONALIZADA EN USD O MULTIPLICADOR DE GREMIO) */}
+                          {/* REGLA DE GANANCIA: ESCALERA POR GAMA vs MONTO FIJO vs MULTIPLICADOR GREMIO */}
                           <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-3">
                             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                               <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wider">
-                                ¿Cómo querés definir tu ganancia limpia (tu 50% en el bolsillo)?
+                                Modo de cálculo para tu 50% limpio:
                               </span>
-                              <div className="flex gap-1.5 w-full sm:w-auto">
-                                <button type="button" onClick={() => {
-                                  const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, parseFloat(cotizador.gananciaObjetivoUSD) || 0) : cotizador.precioCliente;
-                                  setCotizador({...cotizador, modoCalculo: 'fijo', precioCliente: String(nPrecio)});
-                                }} className={`flex-1 sm:flex-initial px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cotizador.modoCalculo === 'fijo' ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
-                                  💵 Monto Libre en USD
+                              <div className="flex gap-1.5 flex-wrap w-full sm:w-auto">
+                                <button type="button" onClick={() => setCotizador({...cotizador, modoCalculo: 'escalera'})} className={`flex-1 sm:flex-initial px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cotizador.modoCalculo === 'escalera' ? 'bg-purple-600 text-white border-purple-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                                  🪜 Escalera por Gama (Recomendado)
                                 </button>
-                                <button type="button" onClick={() => {
-                                  const ganMult = (parseFloat(cotizador.multGremio) || 0) * baseGremio;
-                                  const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, ganMult) : cotizador.precioCliente;
-                                  setCotizador({...cotizador, modoCalculo: 'mult_gremio', gananciaObjetivoUSD: String(ganMult), precioCliente: String(nPrecio)});
-                                }} className={`flex-1 sm:flex-initial px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cotizador.modoCalculo === 'mult_gremio' ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
-                                  ⚡ Multiplicador de Gremio (x U$D {baseGremio})
+                                <button type="button" onClick={() => setCotizador({...cotizador, modoCalculo: 'fijo'})} className={`flex-1 sm:flex-initial px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cotizador.modoCalculo === 'fijo' ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                                  💵 USD Fijo Parejo
+                                </button>
+                                <button type="button" onClick={() => setCotizador({...cotizador, modoCalculo: 'mult_gremio'})} className={`flex-1 sm:flex-initial px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cotizador.modoCalculo === 'mult_gremio' ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                                  ⚡ Multiplicador Gremio
                                 </button>
                               </div>
                             </div>
 
-                            {cotizador.modoCalculo === 'fijo' ? (
+                            {cotizador.modoCalculo === 'escalera' && (
+                              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
+                                <div className="sm:col-span-4">
+                                  <label className="text-[9px] font-bold text-purple-300 uppercase block mb-1">1. Ganancia Base tuya (Ej: iPhone 13 Base)</label>
+                                  <div className="flex items-center bg-slate-950 border border-purple-500/50 rounded-xl px-3 py-1.5">
+                                    <span className="text-emerald-400 font-mono font-black text-xs mr-1.5">+U$D</span>
+                                    <input type="number" step="any" value={cotizador.gananciaObjetivoUSD} onChange={e => setCotizador({...cotizador, gananciaObjetivoUSD: e.target.value})} className="w-full bg-transparent text-white font-mono font-black text-sm focus:outline-none" />
+                                    <span className="text-[10px] text-slate-500 ml-1">tuyos</span>
+                                  </div>
+                                </div>
+                                <div className="sm:col-span-4">
+                                  <label className="text-[9px] font-bold text-purple-300 uppercase block mb-1">2. Salto por Escalón (Línea y Pro/Max)</label>
+                                  <div className="flex items-center bg-slate-950 border border-purple-500/50 rounded-xl px-3 py-1.5">
+                                    <span className="text-purple-400 font-mono font-black text-xs mr-1.5">+U$D</span>
+                                    <input type="number" step="0.5" value={cotizador.escalonUSD} onChange={e => setCotizador({...cotizador, escalonUSD: e.target.value})} className="w-full bg-transparent text-white font-mono font-black text-sm focus:outline-none" />
+                                    <span className="text-[10px] text-slate-500 ml-1">por gama</span>
+                                  </div>
+                                </div>
+                                <div className="sm:col-span-4 bg-slate-950 border border-slate-800 rounded-xl p-2 text-[10px] text-slate-400">
+                                  Con <strong className="text-emerald-400">+{cotizador.gananciaObjetivoUSD} USD</strong> de base y salto de <strong className="text-purple-300">+{cotizador.escalonUSD} USD</strong>, el 13 arranca cerca de $90.000 y sube en escalera hasta el 15 Pro Max (~$145.000).
+                                </div>
+                              </div>
+                            )}
+
+                            {cotizador.modoCalculo === 'fijo' && (
                               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
                                 <div className="sm:col-span-5">
                                   <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Escribir Ganancia Limpia deseada (USD)</label>
                                   <div className="flex items-center bg-slate-950 border border-emerald-500/50 rounded-xl px-3 py-1.5">
                                     <span className="text-emerald-400 font-mono font-black text-xs mr-2">+U$D</span>
-                                    <input type="number" step="any" placeholder="Ej: 18, 25, 30..." value={cotizador.gananciaObjetivoUSD} onChange={e => {
+                                    <input type="number" step="any" value={cotizador.gananciaObjetivoUSD} onChange={e => {
                                       const val = e.target.value;
-                                      const num = parseFloat(val) || 0;
-                                      const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, num) : cotizador.precioCliente;
+                                      const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, parseFloat(val) || 0) : cotizador.precioCliente;
                                       setCotizador({...cotizador, gananciaObjetivoUSD: val, precioCliente: String(nPrecio)});
                                     }} className="w-full bg-transparent text-white font-mono font-black text-sm focus:outline-none" />
-                                    <span className="text-[10px] text-slate-500 font-mono ml-2">limpios</span>
                                   </div>
                                 </div>
                                 <div className="sm:col-span-7">
                                   <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Atajos rápidos (Tu 50% neto)</label>
                                   <div className="grid grid-cols-5 gap-1.5">
-                                    {[10, 15, 20, 25, 30].map(val => (
+                                    {[15, 20, 25, 30, 35].map(val => (
                                       <button key={val} type="button" onClick={() => {
                                         const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, val) : cotizador.precioCliente;
                                         setCotizador({...cotizador, gananciaObjetivoUSD: String(val), precioCliente: String(nPrecio)});
-                                      }} className={`py-1.5 rounded-xl text-xs font-mono font-black border transition ${parseFloat(cotizador.gananciaObjetivoUSD) === val ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-slate-950 text-emerald-400 border-slate-800 hover:bg-slate-800'}`}>
+                                      }} className={`py-1.5 rounded-xl text-xs font-mono font-black border transition ${parseFloat(cotizador.gananciaObjetivoUSD) === val ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-slate-950 text-emerald-400 border-slate-800'}`}>
                                         +${val}
                                       </button>
                                     ))}
                                   </div>
                                 </div>
                               </div>
-                            ) : (
+                            )}
+
+                            {cotizador.modoCalculo === 'mult_gremio' && (
                               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
                                 <div className="sm:col-span-5">
-                                  <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">¿Cuántas reparaciones de Gremio (U$D {baseGremio}) querés que valga 1 Cliente?</label>
+                                  <label className="text-[9px] font-bold text-amber-400 uppercase block mb-1">1 Cliente equivale a X reparaciones de Gremio (U$D {baseGremio})</label>
                                   <div className="flex items-center gap-1.5">
                                     <div className="flex-1 flex items-center bg-slate-950 border border-amber-500/50 rounded-xl px-3 py-1.5">
-                                      <input type="number" step="any" placeholder="Ej: 3" value={cotizador.multGremio} onChange={e => {
+                                      <input type="number" step="any" value={cotizador.multGremio} onChange={e => {
                                         const mVal = e.target.value;
                                         const ganUSD = (parseFloat(mVal) || 0) * baseGremio;
                                         const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, ganUSD) : cotizador.precioCliente;
-                                        setCotizador({...cotizador, multGremio: mVal, gananciaObjetivoUSD: String(ganUSD), precioCliente: String(nPrecio)});
+                                        setCotizador({...cotizador, multGremio: mVal, precioCliente: String(nPrecio)});
                                       }} className="w-full bg-transparent text-amber-400 font-mono font-black text-sm focus:outline-none" />
                                       <span className="text-[10px] text-slate-400 font-bold ml-1">x Gremio</span>
                                     </div>
                                     <span className="text-xs font-mono font-black text-emerald-400 bg-slate-950 border border-slate-800 px-2.5 py-2 rounded-xl shrink-0">
-                                      = +U$D {redondear(gananciaMiaObjetivoUSD)} tuyos
+                                      = +U$D {redondear((parseFloat(cotizador.multGremio) || 0) * baseGremio)} tuyos
                                     </span>
                                   </div>
                                 </div>
                                 <div className="sm:col-span-7">
-                                  <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Multiplicadores rápidos (1 Cliente = X Gremios)</label>
+                                  <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Multiplicadores rápidos</label>
                                   <div className="grid grid-cols-5 gap-1.5">
-                                    {[1.5, 2, 2.5, 3, 4].map(m => (
+                                    {[1.5, 2, 2.5, 3, 3.5].map(m => (
                                       <button key={m} type="button" onClick={() => {
                                         const ganUSD = m * baseGremio;
                                         const nPrecio = grupoSel ? recalcularPrecioIndividual(costoRepUSD, ganUSD) : cotizador.precioCliente;
-                                        setCotizador({...cotizador, multGremio: String(m), gananciaObjetivoUSD: String(ganUSD), precioCliente: String(nPrecio)});
-                                      }} className={`py-1.5 rounded-xl text-xs font-mono font-black border transition ${parseFloat(cotizador.multGremio) === m ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-amber-400 border-slate-800 hover:bg-slate-800'}`}>
+                                        setCotizador({...cotizador, multGremio: String(m), precioCliente: String(nPrecio)});
+                                      }} className={`py-1.5 rounded-xl text-xs font-mono font-black border transition ${parseFloat(cotizador.multGremio) === m ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-amber-400 border-slate-800'}`}>
                                         {m}x (${m * baseGremio})
                                       </button>
                                     ))}
@@ -3277,7 +3390,86 @@
                             )}
                           </div>
 
-                          {/* VISTA 1: COTIZADOR INDIVIDUAL */}
+                          {/* VISTA 1: LISTA DE PRECIOS EN ESCALERA (CON RETOQUE POR MODELO Y COPIADO LIMPIO) */}
+                          {cotizador.modoVista === 'lista' && (
+                            <div className="space-y-3 pt-1">
+                              <div className="flex flex-wrap justify-between items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                                    <span>Redondeo:</span>
+                                    <select value={cotizador.redondeoARS} onChange={e => setCotizador({...cotizador, redondeoARS: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs">
+                                      <option value="5000">Cada $5.000</option>
+                                      <option value="1000">Cada $1.000</option>
+                                      <option value="500">Cada $500</option>
+                                    </select>
+                                  </div>
+                                  {Object.keys(cotizador.preciosManualesARS || {}).length > 0 && (
+                                    <button type="button" onClick={() => setCotizador({...cotizador, preciosManualesARS: {}})} className="text-[11px] text-amber-400 hover:underline font-bold px-2 py-1 bg-slate-950 rounded-lg border border-slate-800">
+                                      ↺ Restaurar precios automáticos
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="flex gap-1.5 flex-wrap">
+                                  <button type="button" onClick={() => copiarListaAlPortapapeles('cliente_ars')} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 shadow">
+                                    <i className={`fa-solid ${cotizador.copiadoTipo === 'cliente_ars' ? 'fa-check' : 'fa-copy'}`}></i>
+                                    {cotizador.copiadoTipo === 'cliente_ars' ? '¡Copiada (Formato Escalera)!' : 'Copiar Lista Clientes (ARS)'}
+                                  </button>
+                                  <button type="button" onClick={() => copiarListaAlPortapapeles('gremio_usd')} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 shadow">
+                                    <i className={`fa-solid ${cotizador.copiadoTipo === 'gremio_usd' ? 'fa-check' : 'fa-copy'}`}></i>
+                                    {cotizador.copiadoTipo === 'gremio_usd' ? '¡Lista Gremio Copiada!' : 'Copiar Lista Gremio'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="max-h-96 overflow-y-auto space-y-1.5 pr-1">
+                                {modelosParaLista.map(item => (
+                                  <div key={item.nombreLista} className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-2.5 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center text-xs">
+                                    <div className="sm:col-span-4 flex items-center justify-between sm:block">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <p className="font-black text-white text-sm">{item.nombreLista}</p>
+                                        {item.esCompatible && (
+                                          <span className="bg-purple-950 border border-purple-500/40 text-purple-300 px-1.5 py-0.2 rounded text-[9px] font-bold">
+                                            🔗 {item.notaCompat}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[10px] text-slate-400 font-mono">Costo Bat: U$D {item.costoUSD} • Disp: {item.stock}</p>
+                                    </div>
+
+                                    <div className="sm:col-span-3 text-center bg-slate-950 p-1.5 rounded-lg border border-slate-800">
+                                      <span className="text-[9px] text-emerald-400 font-bold uppercase block">Tu 50% Limpio en este escalón</span>
+                                      <span className="font-mono font-black text-emerald-400 text-xs">+U$D {item.gananciaMiaUSD}</span>
+                                      <span className="text-slate-400 font-mono text-[10px]"> (+$ {Math.round(item.gananciaMiaUSD * db.cotizacionDolar).toLocaleString('es-AR')})</span>
+                                    </div>
+
+                                    {/* PRECIO CLIENTE EDITABLE CON BOTONES -5K / +5K */}
+                                    <div className="sm:col-span-3 bg-cyan-950/30 p-1.5 rounded-lg border border-cyan-500/40">
+                                      <div className="flex justify-between items-center mb-0.5 px-1">
+                                        <span className="text-[9px] text-cyan-300 font-black uppercase">Precio Lista (ARS)</span>
+                                        {item.tieneAjusteManual && (
+                                          <button type="button" onClick={() => cambiarPrecioManualFila(item.nombreLista, '')} className="text-[9px] text-amber-400 hover:underline">Auto</button>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <button type="button" onClick={() => cambiarPrecioManualFila(item.nombreLista, Math.max(0, item.precioClienteARS - 2000))} className="bg-slate-950 hover:bg-slate-800 text-slate-300 px-2 py-1 rounded font-bold text-xs border border-slate-700">-</button>
+                                        <input type="number" step="1000" value={item.precioClienteARS} onChange={e => cambiarPrecioManualFila(item.nombreLista, e.target.value)} className="w-full min-w-0 bg-slate-950 border border-cyan-500/40 rounded px-2 py-1 text-center font-mono font-black text-white text-xs focus:outline-none" />
+                                        <button type="button" onClick={() => cambiarPrecioManualFila(item.nombreLista, item.precioClienteARS + 2000)} className="bg-slate-950 hover:bg-slate-800 text-slate-300 px-2 py-1 rounded font-bold text-xs border border-slate-700">+</button>
+                                      </div>
+                                    </div>
+
+                                    <div className="sm:col-span-2 text-right bg-amber-950/20 p-1.5 rounded-lg border border-amber-500/30">
+                                      <span className="text-[9px] text-amber-400 font-bold uppercase block">Gremio (+{baseGremio})</span>
+                                      <span className="font-mono font-black text-amber-400 text-xs">U$D {item.precioGremioUSD}</span>
+                                      <span className="font-mono text-[10px] text-slate-400 block">$ {item.precioGremioARS.toLocaleString('es-AR')}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* VISTA 2: COTIZADOR INDIVIDUAL */}
                           {cotizador.modoVista === 'individual' && (
                             <div className="space-y-3">
                               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
@@ -3291,14 +3483,15 @@
                                     <div className="absolute left-0 right-0 mt-1 bg-slate-900 border-2 border-cyan-500/60 rounded-xl shadow-2xl z-40 p-2 space-y-2">
                                       <input type="text" autoFocus placeholder="Filtrar batería, módulo..." value={cotizador.busq} onChange={e => setCotizador({...cotizador, busq: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs focus:outline-none" />
                                       <div className="max-h-48 overflow-y-auto space-y-1">
-                                        {stockAgrupado.filter(g => !cotizador.busq || g.concepto.toLowerCase().includes(cotizador.busq.toLowerCase())).map(g => {
+                                        {itemsOrdenados.filter(g => !cotizador.busq || g.concepto.toLowerCase().includes(cotizador.busq.toLowerCase()) || g.jerarquia.nombreLimpio.toLowerCase().includes(cotizador.busq.toLowerCase())).map(g => {
                                           const cUSD = obtenerCostoGrupoUSD(g);
                                           return (
                                             <button key={g.key} type="button" onClick={() => {
-                                              const sugPrecio = recalcularPrecioIndividual(cUSD, gananciaMiaObjetivoUSD);
-                                              setCotizador({ ...cotizador, grupoKey: g.key, menuAbierto: false, busq: '', precioCliente: String(sugPrecio) });
+                                              const ganMod = calcularGananciaObjetivoModelo(g.jerarquia.escalonesExtra);
+                                              const sugPrecio = recalcularPrecioIndividual(cUSD, ganMod);
+                                              setCotizador({ ...cotizador, grupoKey: g.esCompatible ? bat13Pro.key : g.key, menuAbierto: false, busq: '', precioCliente: String(sugPrecio) });
                                             }} className="w-full text-left bg-slate-950 hover:bg-slate-800 p-2 rounded-lg text-xs flex justify-between items-center border border-slate-800">
-                                              <span className="font-bold text-white">{g.concepto} <span className="text-[10px] text-slate-400">(Stock: {g.cantidadTotal})</span></span>
+                                              <span className="font-bold text-white">{g.jerarquia.nombreLimpio} <span className="text-[10px] text-slate-400">({g.esCompatible ? 'Usa Bat 13 Pro' : `Stock: ${g.cantidadTotal}`})</span></span>
                                               <span className="font-mono font-black text-amber-400">U$D {redondear(cUSD)}</span>
                                             </button>
                                           );
@@ -3309,7 +3502,7 @@
                                 </div>
 
                                 <div className="md:col-span-5">
-                                  <label className="text-[9px] font-bold text-cyan-400 uppercase block mb-1">Precio Final a Cobrar al Cliente (Podés retocarlo a mano)</label>
+                                  <label className="text-[9px] font-bold text-cyan-400 uppercase block mb-1">Precio Final a Cobrar al Cliente</label>
                                   <div className="flex">
                                     <input type="number" step="any" placeholder="Precio final" value={cotizador.precioCliente} onChange={e => setCotizador({...cotizador, precioCliente: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-cyan-500/50 rounded-l-xl px-3 py-2 text-white font-mono font-bold text-xs" />
                                     <select value={cotizador.monedaCliente} onChange={e => {
@@ -3358,64 +3551,6 @@
                                   </div>
                                 </div>
                               )}
-                            </div>
-                          )}
-
-                          {/* VISTA 2: GENERADOR AUTOMÁTICO DE LISTA DE PRECIOS POR MODELO */}
-                          {cotizador.modoVista === 'lista' && (
-                            <div className="space-y-3 pt-1">
-                              <div className="flex flex-wrap justify-between items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <button type="button" onClick={() => setCotizador({...cotizador, soloBateriasLista: !cotizador.soloBateriasLista})} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cotizador.soloBateriasLista ? 'bg-purple-600 text-white border-purple-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
-                                    {cotizador.soloBateriasLista ? '🔋 Mostrando Solo Baterías' : '📦 Mostrando Todo el Stock'}
-                                  </button>
-                                  <div className="flex items-center gap-1 text-[11px] text-slate-400">
-                                    <span>Redondeo ARS:</span>
-                                    <select value={cotizador.redondeoARS} onChange={e => setCotizador({...cotizador, redondeoARS: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs">
-                                      <option value="1000">Cada $1.000</option>
-                                      <option value="500">Cada $500</option>
-                                      <option value="1">Exacto ($1)</option>
-                                    </select>
-                                  </div>
-                                </div>
-
-                                <div className="flex gap-1.5 flex-wrap">
-                                  <button type="button" onClick={() => copiarListaAlPortapapeles('cliente_ars')} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 shadow">
-                                    <i className={`fa-solid ${cotizador.copiadoTipo === 'cliente_ars' ? 'fa-check' : 'fa-copy'}`}></i>
-                                    {cotizador.copiadoTipo === 'cliente_ars' ? '¡Lista Cliente Copiada!' : 'Copiar Lista Clientes (ARS)'}
-                                  </button>
-                                  <button type="button" onClick={() => copiarListaAlPortapapeles('gremio_usd')} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 shadow">
-                                    <i className={`fa-solid ${cotizador.copiadoTipo === 'gremio_usd' ? 'fa-check' : 'fa-copy'}`}></i>
-                                    {cotizador.copiadoTipo === 'gremio_usd' ? '¡Lista Gremio Copiada!' : 'Copiar Lista Gremio'}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="max-h-72 overflow-y-auto space-y-1.5 pr-1">
-                                {modelosParaLista.map(item => (
-                                  <div key={item.concepto} className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-2.5 grid grid-cols-2 sm:grid-cols-12 gap-2 items-center text-xs">
-                                    <div className="col-span-2 sm:col-span-4">
-                                      <p className="font-black text-white">{item.concepto}</p>
-                                      <p className="text-[10px] text-slate-400 font-mono">Costo Rep: U$D {item.costoUSD} • Stock: {item.stock}</p>
-                                    </div>
-                                    <div className="col-span-1 sm:col-span-3 text-left sm:text-center bg-slate-950 p-1.5 rounded-lg border border-slate-800">
-                                      <span className="text-[9px] text-emerald-400 font-bold uppercase block">Ganás Vos (50%) / Local (50%)</span>
-                                      <span className="font-mono font-bold text-emerald-400 text-[11px]">+U$D {item.gananciaMiaUSD}</span>
-                                      <span className="text-slate-500 font-mono text-[10px]"> / -U$D {item.sacaLocalUSD}</span>
-                                    </div>
-                                    <div className="col-span-1 sm:col-span-3 text-right sm:text-center bg-cyan-950/30 p-1.5 rounded-lg border border-cyan-500/40">
-                                      <span className="text-[9px] text-cyan-300 font-black uppercase block">Cobrar a Cliente (Particular)</span>
-                                      <span className="font-mono font-black text-white text-sm">$ {item.precioClienteARS.toLocaleString('es-AR')}</span>
-                                      <span className="font-mono text-[10px] text-cyan-400 ml-1.5">(U$D {item.precioClienteUSD})</span>
-                                    </div>
-                                    <div className="col-span-2 sm:col-span-2 text-right bg-amber-950/20 p-1.5 rounded-lg border border-amber-500/30">
-                                      <span className="text-[9px] text-amber-400 font-bold uppercase block">Precio Gremio</span>
-                                      <span className="font-mono font-black text-amber-400 text-xs">U$D {item.precioGremioUSD}</span>
-                                      <span className="font-mono text-[10px] text-slate-400 block">$ {item.precioGremioARS.toLocaleString('es-AR')}</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
                             </div>
                           )}
                         </div>
