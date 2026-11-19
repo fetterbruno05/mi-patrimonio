@@ -9,6 +9,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
     /* AUTO-AJUSTE PROPORCIONAL: Celu, Notebook, Full HD y Monitores 2K / 2540px+ */
@@ -1025,6 +1026,381 @@
           navigator.clipboard.writeText(lineas.join('\n'));
           setCopiadoId(`gtia_${item.id}`);
           setTimeout(() => setCopiadoId(prev => (prev === `gtia_${item.id}` ? null : prev)), 2500);
+      };
+
+      const limpiarNombreArchivoPDF = (txt) => (txt || 'equipo').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 30);
+
+      const descargarPDFRecepcion = (item) => {
+          if (!window.jspdf || !window.jspdf.jsPDF) return alert('No se cargó el generador de PDF. Recargá la página e intentá de nuevo.');
+          const { jsPDF } = window.jspdf;
+          const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+
+          const nroOrden = String(item.id).slice(-6);
+          const fechaIng = new Date(item.fechaTimestamp || item.id).toLocaleDateString('es-AR');
+          const nombreCli = item.origen === 'cliente' ? (item.clienteNombre || 'Cliente Particular') : (item.gremio || 'Gremio');
+          const monPres = item.presupuestoMoneda || 'ARS';
+          const presTexto = item.presupuesto
+              ? (monPres === 'USD' ? `U$D ${redondear(parseFloat(item.presupuesto)).toLocaleString('es-AR')} USD` : `$ ${Math.round(parseFloat(item.presupuesto)).toLocaleString('es-AR')} ARS`)
+              : 'A confirmar tras diagnóstico';
+
+          // ENCABEZADO PROFESIONAL VIOLETA OSCURO
+          doc.setFillColor(46, 16, 101);
+          doc.rect(0, 0, 210, 34, 'F');
+          doc.setFillColor(147, 51, 234);
+          doc.rect(0, 34, 210, 1.5, 'F');
+
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(16);
+          doc.text('COMPROBANTE DE RECEPCIÓN', 15, 15);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(216, 180, 254);
+          doc.text('SERVICIO TÉCNICO ESPECIALIZADO', 15, 23);
+
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(11);
+          doc.text(`ORDEN N° #${nroOrden}`, 195, 14, { align: 'right' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(216, 180, 254);
+          doc.text(`Fecha de ingreso: ${fechaIng}`, 195, 22, { align: 'right' });
+
+          // TARJETAS DE CLIENTE Y EQUIPO
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.roundedRect(15, 44, 87, 34, 3, 3, 'FD');
+          doc.roundedRect(108, 44, 87, 34, 3, 3, 'FD');
+
+          // Izquierda: Cliente
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(107, 33, 168);
+          doc.text('DATOS DEL CLIENTE', 20, 51);
+          doc.setFontSize(11);
+          doc.setTextColor(15, 23, 42);
+          doc.text(doc.splitTextToSize(nombreCli, 77)[0], 20, 59);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(71, 85, 105);
+          doc.text(item.origen === 'cliente' ? `Teléfono: ${item.clienteTelefono || 'No registrado'}` : 'Cuenta Mayorista / Gremio', 20, 66);
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text(item.origen === 'cliente' ? 'Tipo: Cliente Particular' : 'Tipo: Gremio', 20, 73);
+
+          // Derecha: Equipo
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(107, 33, 168);
+          doc.text('DATOS DEL EQUIPO', 113, 51);
+          doc.setFontSize(11);
+          doc.setTextColor(15, 23, 42);
+          doc.text(doc.splitTextToSize(item.modelo || '-', 77)[0], 113, 59);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9.5);
+          doc.setTextColor(51, 65, 85);
+          doc.text(`IMEI: ${item.imei || '-'}`, 113, 66);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text(`Estado actual: ${item.estadoTaller || 'En revisión'}`, 113, 73);
+
+          // DETALLE DE LA ORDEN
+          let y = 90;
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9.5);
+          doc.setTextColor(88, 28, 135);
+          doc.text('DETALLE DE INGRESO AL TALLER', 15, y);
+          doc.setDrawColor(233, 213, 255);
+          doc.line(15, y + 2.5, 195, y + 2.5);
+          y += 10;
+
+          // Falla declarada
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(100, 116, 139);
+          doc.text('TRABAJO SOLICITADO / FALLA DECLARADA', 15, y);
+          const fallaLines = doc.splitTextToSize(item.falla || 'Sin especificar', 172);
+          const fallaH = Math.max(12, fallaLines.length * 5.2 + 6);
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.roundedRect(15, y + 2.5, 180, fallaH, 2.5, 2.5, 'FD');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10);
+          doc.setTextColor(15, 23, 42);
+          doc.text(fallaLines, 19, y + 8.5);
+          y += fallaH + 11;
+
+          // Estado visual
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(100, 116, 139);
+          doc.text('ESTADO VISUAL Y OBSERVACIONES AL RECIBIR EL EQUIPO', 15, y);
+          const obsLines = doc.splitTextToSize(item.estadoVisual || 'Sin observaciones adicionales registradas al ingreso.', 172);
+          const obsH = Math.max(14, obsLines.length * 5.2 + 6);
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.roundedRect(15, y + 2.5, 180, obsH, 2.5, 2.5, 'FD');
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(51, 65, 85);
+          doc.text(obsLines, 19, y + 8.5);
+          y += obsH + 12;
+
+          // Presupuesto estimado (solo clientes particulares)
+          if (item.origen === 'cliente') {
+              doc.setFillColor(245, 243, 255);
+              doc.setDrawColor(196, 181, 253);
+              doc.roundedRect(15, y, 180, 15, 2.5, 2.5, 'FD');
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(9);
+              doc.setTextColor(88, 28, 135);
+              doc.text('PRESUPUESTO ESTIMADO:', 20, y + 9.5);
+              doc.setFontSize(12);
+              doc.setTextColor(46, 16, 101);
+              doc.text(presTexto, 190, y + 9.5, { align: 'right' });
+              y += 23;
+          }
+
+          // CONDICIONES DE RECEPCIÓN
+          const yCond = Math.max(y + 4, 178);
+          const textoCond = [
+              '1. El presupuesto estimado puede sufrir modificaciones si durante la apertura se detectan fallas internas o daños por humedad no visibles al ingreso.',
+              '2. El taller no se responsabiliza por pérdida de datos o configuraciones; se recomienda realizar copia de seguridad antes de dejar el equipo.',
+              '3. Para retirar el equipo será necesario presentar este comprobante o acreditar titularidad.'
+          ].join('\n');
+          const condLines = doc.splitTextToSize(textoCond, 168);
+          const condH = condLines.length * 4.8 + 14;
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.roundedRect(15, yCond, 180, condH, 2.5, 2.5, 'FD');
+          doc.setFillColor(107, 33, 168);
+          doc.rect(15, yCond, 2.5, condH, 'F');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.setTextColor(71, 85, 105);
+          doc.text('CONDICIONES DE RECEPCIÓN', 22, yCond + 7);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.2);
+          doc.setTextColor(100, 116, 139);
+          doc.text(condLines, 22, yCond + 13);
+
+          // FIRMAS Y PIE DE PÁGINA
+          doc.setDrawColor(148, 163, 184);
+          doc.line(25, 258, 85, 258);
+          doc.line(125, 258, 185, 258);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text('Firma Técnico Responsable', 55, 263.5, { align: 'center' });
+          doc.text('Conformidad del Cliente', 155, 263.5, { align: 'center' });
+
+          doc.setDrawColor(226, 232, 240);
+          doc.line(15, 280, 195, 280);
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text(`Comprobante digital de recepción #${nroOrden} - Conservar para seguimiento y retiro del equipo.`, 105, 286, { align: 'center' });
+
+          doc.save(`Recibo_${limpiarNombreArchivoPDF(item.modelo)}_${limpiarNombreArchivoPDF(nombreCli)}.pdf`);
+      };
+
+      const descargarPDFGarantia = (item) => {
+          if (!window.jspdf || !window.jspdf.jsPDF) return alert('No se cargó el generador de PDF. Recargá la página e intentá de nuevo.');
+          const { jsPDF } = window.jspdf;
+          const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+
+          const eq = item.equipoOriginal || {};
+          const nroCert = String(item.id).slice(-6);
+          const fechaEnt = item.fecha || new Date(item.fechaTimestamp || item.id).toLocaleDateString('es-AR');
+          const nombreCli = eq.origen === 'cliente' ? (eq.clienteNombre || 'Cliente Particular') : (eq.gremio || 'Gremio');
+
+          const esBat = esTextoBateria(eq.falla) || esTextoBateria(item.repuestoUsado);
+          const diasTot = item.diasGarantia !== undefined ? parseInt(item.diasGarantia) : (esBat ? 180 : 90);
+          const fechaVenc = diasTot > 0
+              ? new Date((item.fechaTimestamp || item.id) + (diasTot * 24 * 60 * 60 * 1000)).toLocaleDateString('es-AR')
+              : null;
+
+          const monOrig = item.monedaCobroOriginal || 'ARS';
+          const montoOrigNum = parseFloat(item.montoCobradoOriginal) || 0;
+          const totalTexto = monOrig === 'USD'
+              ? `U$D ${redondear(montoOrigNum).toLocaleString('es-AR')} USD`
+              : `$ ${Math.round(montoOrigNum).toLocaleString('es-AR')} ARS`;
+
+          // ENCABEZADO PROFESIONAL VIOLETA OSCURO
+          doc.setFillColor(46, 16, 101);
+          doc.rect(0, 0, 210, 34, 'F');
+          doc.setFillColor(147, 51, 234);
+          doc.rect(0, 34, 210, 1.5, 'F');
+
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(15.5);
+          doc.text('CERTIFICADO DE ENTREGA Y GARANTÍA', 15, 15);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(216, 180, 254);
+          doc.text('SERVICIO TÉCNICO ESPECIALIZADO', 15, 23);
+
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(11);
+          doc.text(`CERTIFICADO N° #${nroCert}`, 195, 14, { align: 'right' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(216, 180, 254);
+          doc.text(`Fecha de entrega: ${fechaEnt}`, 195, 22, { align: 'right' });
+
+          // TARJETAS DE CLIENTE Y EQUIPO
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.roundedRect(15, 44, 87, 34, 3, 3, 'FD');
+          doc.roundedRect(108, 44, 87, 34, 3, 3, 'FD');
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(107, 33, 168);
+          doc.text('TITULAR DEL EQUIPO', 20, 51);
+          doc.setFontSize(11);
+          doc.setTextColor(15, 23, 42);
+          doc.text(doc.splitTextToSize(nombreCli, 77)[0], 20, 59);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.setTextColor(71, 85, 105);
+          doc.text(eq.origen === 'cliente' ? `Teléfono: ${eq.clienteTelefono || 'No registrado'}` : 'Cuenta Mayorista / Gremio', 20, 66);
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text(eq.origen === 'cliente' ? 'Modalidad: Cliente Particular' : 'Modalidad: Gremio', 20, 73);
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(107, 33, 168);
+          doc.text('DATOS DEL DISPOSITIVO', 113, 51);
+          doc.setFontSize(11);
+          doc.setTextColor(15, 23, 42);
+          doc.text(doc.splitTextToSize(eq.modelo || '-', 77)[0], 113, 59);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9.5);
+          doc.setTextColor(51, 65, 85);
+          doc.text(`IMEI: ${eq.imei || '-'}`, 113, 66);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text(`Entregado el: ${fechaEnt}`, 113, 73);
+
+          // RESUMEN DEL SERVICIO
+          let y = 90;
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9.5);
+          doc.setTextColor(88, 28, 135);
+          doc.text('DETALLE DEL SERVICIO REALIZADO', 15, y);
+          doc.setDrawColor(233, 213, 255);
+          doc.line(15, y + 2.5, 195, y + 2.5);
+          y += 10;
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(100, 116, 139);
+          doc.text('TRABAJO / REPARACIÓN REALIZADA', 15, y);
+          const trabLines = doc.splitTextToSize(eq.falla || 'Servicio técnico', 172);
+          const trabH = Math.max(12, trabLines.length * 5.2 + 6);
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.roundedRect(15, y + 2.5, 180, trabH, 2.5, 2.5, 'FD');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10);
+          doc.setTextColor(15, 23, 42);
+          doc.text(trabLines, 19, y + 8.5);
+          y += trabH + 10;
+
+          if (eq.estadoVisual) {
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(8);
+              doc.setTextColor(100, 116, 139);
+              doc.text('OBSERVACIONES REGISTRADAS AL INGRESO', 15, y);
+              const obsLines = doc.splitTextToSize(eq.estadoVisual, 172);
+              const obsH = Math.max(12, obsLines.length * 5.2 + 6);
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(226, 232, 240);
+              doc.roundedRect(15, y + 2.5, 180, obsH, 2.5, 2.5, 'FD');
+              doc.setFont('helvetica', 'normal');
+              doc.setFontSize(9.5);
+              doc.setTextColor(51, 65, 85);
+              doc.text(obsLines, 19, y + 8.5);
+              y += obsH + 10;
+          }
+
+          // IMPORTE TOTAL
+          doc.setFillColor(236, 253, 245);
+          doc.setDrawColor(110, 231, 183);
+          doc.roundedRect(15, y, 180, 15, 2.5, 2.5, 'FD');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.setTextColor(6, 95, 70);
+          doc.text('IMPORTE TOTAL DEL SERVICIO:', 20, y + 9.5);
+          doc.setFontSize(12);
+          doc.setTextColor(4, 120, 87);
+          doc.text(totalTexto, 190, y + 9.5, { align: 'right' });
+          y += 23;
+
+          // BLOQUE DESTACADO DE GARANTÍA Y CLÁUSULAS
+          let tituloGtia = 'SIN COBERTURA DE GARANTÍA';
+          let vigenciaTxt = 'Este servicio fue entregado sin garantía extendida.';
+          let clausulaTxt = 'El equipo ha sido probado y verificado al momento de la entrega.';
+          let bgR = 248, bgG = 250, bgB = 252, brR = 203, brG = 213, brB = 225, acR = 100, acG = 116, acB = 139;
+
+          if (diasTot === 180 || (diasTot > 0 && esBat)) {
+              const plazoLbl = diasTot === 180 ? '6 MESES (180 DÍAS)' : `${diasTot} DÍAS`;
+              tituloGtia = `GARANTÍA DE BATERÍA: ${plazoLbl}`;
+              vigenciaTxt = `Vigencia: Desde el ${fechaEnt} hasta el ${fechaVenc}`;
+              clausulaTxt = 'CONDICIÓN EXCLUYENTE: La cobertura de garantía en cambio de batería aplica únicamente verificando el uso de CARGADOR ORIGINAL. Cubre defectos de fabricación del repuesto o falla de instalación. Queda sin efecto ante golpes, fisuras, contacto con líquidos, sobrecarga eléctrica, uso de cargadores alternativos o manipulación por terceros.';
+              bgR = 250; bgG = 245; bgB = 255; brR = 192; brG = 132; brB = 252; acR = 107; acG = 33; acB = 168;
+          } else if (diasTot > 0) {
+              const plazoLbl = diasTot === 90 ? '3 MESES (90 DÍAS)' : diasTot === 30 ? '1 MES (30 DÍAS)' : `${diasTot} DÍAS`;
+              tituloGtia = `COBERTURA DE GARANTÍA: ${plazoLbl}`;
+              vigenciaTxt = `Vigencia: Desde el ${fechaEnt} hasta el ${fechaVenc}`;
+              clausulaTxt = 'CONDICIONES DE COBERTURA: La garantía cubre exclusivamente fallas propias del repuesto instalado o de la mano de obra realizada. Queda sin efecto ante golpes, roturas de pantalla/tapa, contacto con líquidos, sobrecargas eléctricas o intervención de terceros.';
+              bgR = 240; bgG = 253; bgB = 250; brR = 94; brG = 234; brB = 212; acR = 15; acG = 118; acB = 110;
+          }
+
+          const clLines = doc.splitTextToSize(clausulaTxt, 168);
+          const gtiaH = clLines.length * 4.8 + 24;
+          doc.setFillColor(bgR, bgG, bgB);
+          doc.setDrawColor(brR, brG, brB);
+          doc.roundedRect(15, y, 180, gtiaH, 3, 3, 'FD');
+          doc.setFillColor(acR, acG, acB);
+          doc.rect(15, y, 3, gtiaH, 'F');
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10.5);
+          doc.setTextColor(acR, acG, acB);
+          doc.text(tituloGtia, 22, y + 8.5);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.setTextColor(30, 41, 59);
+          doc.text(vigenciaTxt, 22, y + 14.5);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(71, 85, 105);
+          doc.text(clLines, 22, y + 21);
+
+          // FIRMAS Y PIE DE PÁGINA
+          doc.setDrawColor(148, 163, 184);
+          doc.line(25, 258, 85, 258);
+          doc.line(125, 258, 185, 258);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text('Firma Técnico Responsable', 55, 263.5, { align: 'center' });
+          doc.text('Conformidad del Cliente', 155, 263.5, { align: 'center' });
+
+          doc.setDrawColor(226, 232, 240);
+          doc.line(15, 280, 195, 280);
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text(`Certificado digital #${nroCert} - Presentar este documento junto al equipo para gestionar la garantía.`, 105, 286, { align: 'center' });
+
+          doc.save(`Garantia_${limpiarNombreArchivoPDF(eq.modelo)}_${limpiarNombreArchivoPDF(nombreCli)}.pdf`);
       };
       const eliminarEquipoTaller = (itemEquipo) => {
           if (window.confirm(`¿Estás seguro de ELIMINAR el registro de este ${itemEquipo.modelo} sin cobrar nada?`)) {
@@ -2300,6 +2676,10 @@
                                                 <i className={`fa-solid ${copiadoId === `rec_${item.id}` ? 'fa-check' : 'fa-receipt'}`}></i>
                                                 <span>{copiadoId === `rec_${item.id}` ? '¡Copiado!' : 'Recibo'}</span>
                                               </button>
+                                              <button type="button" onClick={() => descargarPDFRecepcion(item)} className="px-2.5 h-8 rounded-lg transition-colors text-xs font-bold flex items-center gap-1 bg-purple-950 hover:bg-purple-800 text-purple-200 border border-purple-500/50" title="Descargar Comprobante en PDF">
+                                                <i className="fa-solid fa-file-pdf text-rose-400"></i>
+                                                <span>PDF</span>
+                                              </button>
                                               <button onClick={() => setEditandoTaller({ ...item, presupuesto: item.presupuesto || '', presupuestoMoneda: item.presupuestoMoneda || 'ARS', estadoTaller: item.estadoTaller || 'En revisión' })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white w-8 h-8 rounded-lg transition-colors text-xs" title="Editar equipo"><i className="fa-solid fa-pen"></i></button>
                                               <button onClick={() => eliminarEquipoTaller(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 w-8 h-8 rounded-lg transition-colors text-xs" title="Eliminar"><i className="fa-solid fa-trash"></i></button>
                                             </div>
@@ -2719,6 +3099,9 @@
                                     <i className={`fa-solid ${copiadoId === `gtia_${item.id}` ? 'fa-check' : 'fa-shield-halved'} mr-1`}></i>
                                     {copiadoId === `gtia_${item.id}` ? '¡Copiado!' : 'Certificado'}
                                   </button>
+                                  <button type="button" onClick={() => descargarPDFGarantia(item)} className="px-2.5 py-1 rounded-lg transition-colors text-[11px] font-bold bg-purple-950 hover:bg-purple-800 text-purple-200 border border-purple-500/50" title="Descargar Certificado de Garantía en PDF">
+                                    <i className="fa-solid fa-file-pdf text-rose-400 mr-1"></i>PDF
+                                  </button>
                                   <button onClick={() => setEditandoRepHist({
                                     ...item,
                                     nuevoMonto: item.montoCobradoOriginal,
@@ -2913,6 +3296,9 @@
                                     <button type="button" onClick={() => copiarCertificadoGarantia(item)} className={`font-bold px-3 py-1.5 rounded-lg text-xs transition ${copiadoId === `gtia_${item.id}` ? 'bg-emerald-600 text-white' : 'bg-teal-950 hover:bg-teal-800 text-teal-300 border border-teal-500/40'}`}>
                                       <i className={`fa-solid ${copiadoId === `gtia_${item.id}` ? 'fa-check' : 'fa-file-shield'} mr-1.5`}></i>
                                       {copiadoId === `gtia_${item.id}` ? '¡Certificado Copiado!' : 'Copiar Certificado de Garantía'}
+                                    </button>
+                                    <button type="button" onClick={() => descargarPDFGarantia(item)} className="bg-purple-950 hover:bg-purple-800 text-purple-200 border border-purple-500/50 font-bold px-3 py-1.5 rounded-lg text-xs transition">
+                                      <i className="fa-solid fa-file-pdf text-rose-400 mr-1.5"></i>Descargar PDF
                                     </button>
                                     <button onClick={() => {
                                         const matchStock = (db.stock || []).find(s => s.cantidad > 0 && item.repuestoUsado && s.concepto.toLowerCase() === item.repuestoUsado.toLowerCase());
