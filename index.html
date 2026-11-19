@@ -200,6 +200,7 @@
       const [editandoGastoPuntual, setEditandoGastoPuntual] = useState(null); 
       const [editandoTaller, setEditandoTaller] = useState(null);
       const [editandoRepHist, setEditandoRepHist] = useState(null);
+      const [copiadoId, setCopiadoId] = useState(null);
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
 
       const [filtroUsuario, setFiltroUsuario] = useState('');
@@ -943,6 +944,88 @@
           guardarEnNube({ ...db, taller: tallerAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
+      const copiarComprobanteRecepcion = (item) => {
+          const fechaIng = new Date(item.fechaTimestamp || item.id).toLocaleDateString('es-AR');
+          const clienteLinea = item.origen === 'cliente'
+              ? `${item.clienteNombre}${item.clienteTelefono ? ` (Tel: ${item.clienteTelefono})` : ''}`
+              : `${item.gremio} (Gremio)`;
+          const monPres = item.presupuestoMoneda || 'ARS';
+          const presLinea = item.origen === 'cliente'
+              ? (item.presupuesto
+                  ? (monPres === 'USD' ? `U$D ${redondear(parseFloat(item.presupuesto)).toLocaleString('es-AR')} USD` : `$ ${Math.round(parseFloat(item.presupuesto)).toLocaleString('es-AR')} ARS`)
+                  : 'A confirmar tras revisión')
+              : null;
+
+          const lineas = [
+              `📋 *COMPROBANTE DE RECEPCIÓN - SERVICIO TÉCNICO*`,
+              `━━━━━━━━━━━━━━━━━━`,
+              `📅 *Fecha de ingreso:* ${fechaIng}`,
+              `👤 *Cliente:* ${clienteLinea}`,
+              `📱 *Equipo:* ${item.modelo}`,
+              `🔢 *IMEI:* ${item.imei}`,
+              `🔧 *Trabajo / Falla declarada:* ${item.falla}`,
+              `📝 *Estado visual al ingresar:* ${item.estadoVisual || 'Sin observaciones'}`
+          ];
+          if (presLinea) lineas.push(`💰 *Presupuesto estimado:* ${presLinea}`);
+          lineas.push(`━━━━━━━━━━━━━━━━━━`);
+          lineas.push(`_Conservá este comprobante para retirar tu equipo._`);
+
+          navigator.clipboard.writeText(lineas.join('\n'));
+          setCopiadoId(`rec_${item.id}`);
+          setTimeout(() => setCopiadoId(prev => (prev === `rec_${item.id}` ? null : prev)), 2500);
+      };
+
+      const copiarCertificadoGarantia = (item) => {
+          const eq = item.equipoOriginal || {};
+          const fechaEnt = item.fecha || new Date(item.fechaTimestamp || item.id).toLocaleDateString('es-AR');
+          const esBat = esTextoBateria(eq.falla) || esTextoBateria(item.repuestoUsado);
+          const diasTot = item.diasGarantia !== undefined ? parseInt(item.diasGarantia) : (esBat ? 180 : 90);
+          const fechaVenc = diasTot > 0
+              ? new Date((item.fechaTimestamp || item.id) + (diasTot * 24 * 60 * 60 * 1000)).toLocaleDateString('es-AR')
+              : null;
+
+          const clienteLinea = eq.origen === 'cliente'
+              ? `${eq.clienteNombre}${eq.clienteTelefono ? ` (Tel: ${eq.clienteTelefono})` : ''}`
+              : `${eq.gremio} (Gremio)`;
+
+          const monOrig = item.monedaCobroOriginal || 'ARS';
+          const montoOrigNum = parseFloat(item.montoCobradoOriginal) || 0;
+          const totalTexto = monOrig === 'USD'
+              ? `U$D ${redondear(montoOrigNum).toLocaleString('es-AR')} USD`
+              : `$ ${Math.round(montoOrigNum).toLocaleString('es-AR')} ARS`;
+
+          let textoPlazo = 'Sin garantía';
+          let clausula = '';
+          if (diasTot === 180 || (diasTot > 0 && esBat)) {
+              textoPlazo = `${diasTot === 180 ? '6 meses (180 días)' : `${diasTot} días`} — Válida hasta el ${fechaVenc}`;
+              clausula = `⚠️ *Condiciones de garantía de batería:* La cobertura aplica exclusivamente verificando el uso de *cargador original*. No cubre daños por golpes, humedad, sobrecargas ni manipulación externa.`;
+          } else if (diasTot > 0) {
+              const etiquetaPlazo = diasTot === 90 ? '3 meses (90 días)' : diasTot === 30 ? '1 mes (30 días)' : `${diasTot} días`;
+              textoPlazo = `${etiquetaPlazo} — Válida hasta el ${fechaVenc}`;
+              clausula = `⚠️ *Condiciones:* Cubre exclusivamente fallas del repuesto o trabajo realizado. No cubre daños por golpes, humedad ni manipulación por terceros.`;
+          }
+
+          const lineas = [
+              `✅ *COMPROBANTE DE ENTREGA Y GARANTÍA*`,
+              `━━━━━━━━━━━━━━━━━━`,
+              `📅 *Fecha de entrega:* ${fechaEnt}`,
+              `👤 *Cliente:* ${clienteLinea}`,
+              `📱 *Equipo:* ${eq.modelo}`,
+              `🔢 *IMEI:* ${eq.imei}`,
+              `🔧 *Trabajo realizado:* ${eq.falla}`,
+              `💰 *Importe:* ${totalTexto}`,
+              `🛡️ *Garantía:* ${textoPlazo}`
+          ];
+          if (eq.estadoVisual) lineas.push(`📝 *Obs. de ingreso:* ${eq.estadoVisual}`);
+          if (clausula) {
+              lineas.push(`━━━━━━━━━━━━━━━━━━`);
+              lineas.push(clausula);
+          }
+
+          navigator.clipboard.writeText(lineas.join('\n'));
+          setCopiadoId(`gtia_${item.id}`);
+          setTimeout(() => setCopiadoId(prev => (prev === `gtia_${item.id}` ? null : prev)), 2500);
+      };
       const eliminarEquipoTaller = (itemEquipo) => {
           if (window.confirm(`¿Estás seguro de ELIMINAR el registro de este ${itemEquipo.modelo} sin cobrar nada?`)) {
               const log = generarLog('Eliminó Equipo de Taller', `Se eliminó el ${itemEquipo.modelo}.`, itemEquipo);
@@ -2213,6 +2296,10 @@
                                         <div className="flex flex-row sm:flex-col justify-between items-center sm:items-end gap-2 shrink-0">
                                             <div className={`px-2.5 py-1 rounded-lg border font-bold text-[11px] flex items-center gap-1.5 ${colorDias}`}><i className="fa-regular fa-clock"></i> {diasPasados}d</div>
                                             <div className="flex gap-1.5">
+                                              <button type="button" onClick={() => copiarComprobanteRecepcion(item)} className={`px-2.5 h-8 rounded-lg transition-colors text-xs font-bold flex items-center gap-1 ${copiadoId === `rec_${item.id}` ? 'bg-emerald-600 text-white' : 'bg-cyan-950 hover:bg-cyan-800 text-cyan-300 border border-cyan-500/40'}`} title="Copiar Comprobante de Recepción">
+                                                <i className={`fa-solid ${copiadoId === `rec_${item.id}` ? 'fa-check' : 'fa-receipt'}`}></i>
+                                                <span>{copiadoId === `rec_${item.id}` ? '¡Copiado!' : 'Recibo'}</span>
+                                              </button>
                                               <button onClick={() => setEditandoTaller({ ...item, presupuesto: item.presupuesto || '', presupuestoMoneda: item.presupuestoMoneda || 'ARS', estadoTaller: item.estadoTaller || 'En revisión' })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white w-8 h-8 rounded-lg transition-colors text-xs" title="Editar equipo"><i className="fa-solid fa-pen"></i></button>
                                               <button onClick={() => eliminarEquipoTaller(item)} className="bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-400 w-8 h-8 rounded-lg transition-colors text-xs" title="Eliminar"><i className="fa-solid fa-trash"></i></button>
                                             </div>
@@ -2627,7 +2714,11 @@
                                       </div>
                                     </div>
                                 )}
-                                <div className="flex gap-1.5 mt-1">
+                                <div className="flex flex-wrap justify-end gap-1.5 mt-1">
+                                  <button type="button" onClick={() => copiarCertificadoGarantia(item)} className={`px-2.5 py-1 rounded-lg transition-colors text-[11px] font-bold ${copiadoId === `gtia_${item.id}` ? 'bg-emerald-600 text-white' : 'bg-teal-950 hover:bg-teal-800 text-teal-300 border border-teal-500/40'}`} title="Copiar Certificado de Entrega y Garantía">
+                                    <i className={`fa-solid ${copiadoId === `gtia_${item.id}` ? 'fa-check' : 'fa-shield-halved'} mr-1`}></i>
+                                    {copiadoId === `gtia_${item.id}` ? '¡Copiado!' : 'Certificado'}
+                                  </button>
                                   <button onClick={() => setEditandoRepHist({
                                     ...item,
                                     nuevoMonto: item.montoCobradoOriginal,
@@ -2816,20 +2907,27 @@
                               )}
 
                               {/* BOTÓN Y PANEL PARA INGRESAR RECLAMO DE GARANTÍA */}
-                              <div className="flex justify-end pt-1">
+                              <div className="flex flex-wrap justify-end gap-2 pt-1">
                                 {panelReclamoGarantia.idReparacion !== item.id ? (
-                                  <button onClick={() => {
-                                      const matchStock = (db.stock || []).find(s => s.cantidad > 0 && item.repuestoUsado && s.concepto.toLowerCase() === item.repuestoUsado.toLowerCase());
-                                      setPanelReclamoGarantia({
-                                          idReparacion: item.id,
-                                          motivoFalla: '',
-                                          tipoSolucion: matchStock ? 'cambio_rma' : 'ajuste',
-                                          repuestoReemplazoId: matchStock ? String(matchStock.id) : ''
-                                      });
-                                  }} className="bg-slate-800 hover:bg-teal-700 text-slate-200 hover:text-white font-bold px-3 py-1.5 rounded-lg text-xs transition">
-                                    <i className="fa-solid fa-screwdriver-wrench mr-1.5"></i>Registrar Ingreso por Garantía
-                                  </button>
+                                  <>
+                                    <button type="button" onClick={() => copiarCertificadoGarantia(item)} className={`font-bold px-3 py-1.5 rounded-lg text-xs transition ${copiadoId === `gtia_${item.id}` ? 'bg-emerald-600 text-white' : 'bg-teal-950 hover:bg-teal-800 text-teal-300 border border-teal-500/40'}`}>
+                                      <i className={`fa-solid ${copiadoId === `gtia_${item.id}` ? 'fa-check' : 'fa-file-shield'} mr-1.5`}></i>
+                                      {copiadoId === `gtia_${item.id}` ? '¡Certificado Copiado!' : 'Copiar Certificado de Garantía'}
+                                    </button>
+                                    <button onClick={() => {
+                                        const matchStock = (db.stock || []).find(s => s.cantidad > 0 && item.repuestoUsado && s.concepto.toLowerCase() === item.repuestoUsado.toLowerCase());
+                                        setPanelReclamoGarantia({
+                                            idReparacion: item.id,
+                                            motivoFalla: '',
+                                            tipoSolucion: matchStock ? 'cambio_rma' : 'ajuste',
+                                            repuestoReemplazoId: matchStock ? String(matchStock.id) : ''
+                                        });
+                                    }} className="bg-slate-800 hover:bg-teal-700 text-slate-200 hover:text-white font-bold px-3 py-1.5 rounded-lg text-xs transition">
+                                      <i className="fa-solid fa-screwdriver-wrench mr-1.5"></i>Registrar Ingreso por Garantía
+                                    </button>
+                                  </>
                                 ) : (
+                              
                                   <form onSubmit={(e) => procesarReclamoGarantia(e, item)} className="w-full bg-slate-900 border border-teal-500/50 rounded-xl p-3.5 space-y-3 fade-in">
                                     <p className="text-xs font-bold text-teal-400">Registrar atención en Garantía</p>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
