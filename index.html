@@ -1043,71 +1043,73 @@
               ? (monPres === 'USD' ? `U$D ${redondear(parseFloat(item.presupuesto)).toLocaleString('es-AR')} USD` : `$ ${Math.round(parseFloat(item.presupuesto)).toLocaleString('es-AR')} ARS`)
               : 'A confirmar tras diagnóstico';
 
-          // ENCABEZADO PROFESIONAL VIOLETA OSCURO
+          // ENCABEZADO PROFESIONAL VIOLETA OSCURO CON CONTACTO
           doc.setFillColor(46, 16, 101);
-          doc.rect(0, 0, 210, 34, 'F');
+          doc.rect(0, 0, 210, 36, 'F');
           doc.setFillColor(147, 51, 234);
-          doc.rect(0, 34, 210, 1.5, 'F');
+          doc.rect(0, 36, 210, 1.5, 'F');
 
           doc.setTextColor(255, 255, 255);
           doc.setFont('helvetica', 'bold');
-          doc.setFontSize(16);
-          doc.text('COMPROBANTE DE RECEPCIÓN', 15, 15);
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9.5);
+          doc.setFontSize(15.5);
+          doc.text('COMPROBANTE DE RECEPCIÓN', 15, 13);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
           doc.setTextColor(216, 180, 254);
-          doc.text('SERVICIO TÉCNICO ESPECIALIZADO', 15, 23);
+          doc.text('ICONNECTURE  •  SERVICIO TÉCNICO ESPECIALIZADO', 15, 20);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(241, 245, 249);
+          doc.text('Instagram: @iconnecture   |   WhatsApp: 341 366-3882', 15, 28);
 
           doc.setTextColor(255, 255, 255);
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(11);
           doc.text(`ORDEN N° #${nroOrden}`, 195, 14, { align: 'right' });
           doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9.5);
+          doc.setFontSize(9);
           doc.setTextColor(216, 180, 254);
           doc.text(`Fecha de ingreso: ${fechaIng}`, 195, 22, { align: 'right' });
 
           // TARJETAS DE CLIENTE Y EQUIPO
           doc.setFillColor(248, 250, 252);
           doc.setDrawColor(226, 232, 240);
-          doc.roundedRect(15, 44, 87, 34, 3, 3, 'FD');
-          doc.roundedRect(108, 44, 87, 34, 3, 3, 'FD');
+          doc.roundedRect(15, 45, 87, 34, 3, 3, 'FD');
+          doc.roundedRect(108, 45, 87, 34, 3, 3, 'FD');
 
-          // Izquierda: Cliente
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(8);
           doc.setTextColor(107, 33, 168);
-          doc.text('DATOS DEL CLIENTE', 20, 51);
+          doc.text('DATOS DEL CLIENTE', 20, 52);
           doc.setFontSize(11);
           doc.setTextColor(15, 23, 42);
-          doc.text(doc.splitTextToSize(nombreCli, 77)[0], 20, 59);
+          doc.text(doc.splitTextToSize(nombreCli, 77)[0], 20, 60);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(9.5);
           doc.setTextColor(71, 85, 105);
-          doc.text(item.origen === 'cliente' ? `Teléfono: ${item.clienteTelefono || 'No registrado'}` : 'Cuenta Mayorista / Gremio', 20, 66);
+          doc.text(item.origen === 'cliente' ? `Teléfono: ${item.clienteTelefono || 'No registrado'}` : 'Cuenta Mayorista / Gremio', 20, 67);
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          doc.text(item.origen === 'cliente' ? 'Tipo: Cliente Particular' : 'Tipo: Gremio', 20, 73);
+          doc.text(item.origen === 'cliente' ? 'Tipo: Cliente Particular' : 'Tipo: Gremio', 20, 74);
 
-          // Derecha: Equipo
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(8);
           doc.setTextColor(107, 33, 168);
-          doc.text('DATOS DEL EQUIPO', 113, 51);
+          doc.text('DATOS DEL EQUIPO', 113, 52);
           doc.setFontSize(11);
           doc.setTextColor(15, 23, 42);
-          doc.text(doc.splitTextToSize(item.modelo || '-', 77)[0], 113, 59);
+          doc.text(doc.splitTextToSize(item.modelo || '-', 77)[0], 113, 60);
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(9.5);
           doc.setTextColor(51, 65, 85);
-          doc.text(`IMEI: ${item.imei || '-'}`, 113, 66);
+          doc.text(`IMEI: ${item.imei || '-'}`, 113, 67);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          doc.text(`Estado actual: ${item.estadoTaller || 'En revisión'}`, 113, 73);
+          doc.text(`Estado actual: ${item.estadoTaller || 'En revisión'}`, 113, 74);
 
           // DETALLE DE LA ORDEN
-          let y = 90;
+          let y = 91;
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(9.5);
           doc.setTextColor(88, 28, 135);
@@ -1116,7 +1118,6 @@
           doc.line(15, y + 2.5, 195, y + 2.5);
           y += 10;
 
-          // Falla declarada
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(8);
           doc.setTextColor(100, 116, 139);
@@ -1132,7 +1133,6 @@
           doc.text(fallaLines, 19, y + 8.5);
           y += fallaH + 11;
 
-          // Estado visual
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(8);
           doc.setTextColor(100, 116, 139);
@@ -1148,7 +1148,6 @@
           doc.text(obsLines, 19, y + 8.5);
           y += obsH + 12;
 
-          // Presupuesto estimado (solo clientes particulares)
           if (item.origen === 'cliente') {
               doc.setFillColor(245, 243, 255);
               doc.setDrawColor(196, 181, 253);
@@ -1186,21 +1185,36 @@
           doc.setTextColor(100, 116, 139);
           doc.text(condLines, 22, yCond + 13);
 
-          // FIRMAS Y PIE DE PÁGINA
+          // FIRMA CURSIVA PREDETERMINADA ICONNECTURE + LÍNEAS DE FIRMA
+          doc.setFont('times', 'italic');
+          doc.setFontSize(22);
+          doc.setTextColor(46, 16, 101);
+          doc.text('iConnecture', 55, 251.5, { align: 'center' });
+          doc.setDrawColor(147, 51, 234);
+          doc.setLineWidth(0.35);
+          doc.line(37, 253.5, 73, 253.5);
+
+          doc.setLineWidth(0.2);
           doc.setDrawColor(148, 163, 184);
           doc.line(25, 258, 85, 258);
           doc.line(125, 258, 185, 258);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          doc.text('Firma Técnico Responsable', 55, 263.5, { align: 'center' });
+          doc.text('Firma Responsable • iConnecture', 55, 263.5, { align: 'center' });
           doc.text('Conformidad del Cliente', 155, 263.5, { align: 'center' });
 
+          // PIE DE PÁGINA CON CONTACTO
           doc.setDrawColor(226, 232, 240);
-          doc.line(15, 280, 195, 280);
-          doc.setFontSize(8);
+          doc.line(15, 277, 195, 277);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.setTextColor(88, 28, 135);
+          doc.text('iConnecture  •  Instagram: @iconnecture  •  WhatsApp: 341 366-3882', 105, 283, { align: 'center' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.5);
           doc.setTextColor(148, 163, 184);
-          doc.text(`Comprobante digital de recepción #${nroOrden} - Conservar para seguimiento y retiro del equipo.`, 105, 286, { align: 'center' });
+          doc.text(`Comprobante digital de recepción #${nroOrden} - Conservar para seguimiento y retiro del equipo.`, 105, 288.5, { align: 'center' });
 
           doc.save(`Recibo_${limpiarNombreArchivoPDF(item.modelo)}_${limpiarNombreArchivoPDF(nombreCli)}.pdf`);
       };
@@ -1227,69 +1241,73 @@
               ? `U$D ${redondear(montoOrigNum).toLocaleString('es-AR')} USD`
               : `$ ${Math.round(montoOrigNum).toLocaleString('es-AR')} ARS`;
 
-          // ENCABEZADO PROFESIONAL VIOLETA OSCURO
+          // ENCABEZADO PROFESIONAL VIOLETA OSCURO CON CONTACTO
           doc.setFillColor(46, 16, 101);
-          doc.rect(0, 0, 210, 34, 'F');
+          doc.rect(0, 0, 210, 36, 'F');
           doc.setFillColor(147, 51, 234);
-          doc.rect(0, 34, 210, 1.5, 'F');
+          doc.rect(0, 36, 210, 1.5, 'F');
 
           doc.setTextColor(255, 255, 255);
           doc.setFont('helvetica', 'bold');
-          doc.setFontSize(15.5);
-          doc.text('CERTIFICADO DE ENTREGA Y GARANTÍA', 15, 15);
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9.5);
+          doc.setFontSize(15);
+          doc.text('CERTIFICADO DE ENTREGA Y GARANTÍA', 15, 13);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
           doc.setTextColor(216, 180, 254);
-          doc.text('SERVICIO TÉCNICO ESPECIALIZADO', 15, 23);
+          doc.text('ICONNECTURE  •  SERVICIO TÉCNICO ESPECIALIZADO', 15, 20);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(241, 245, 249);
+          doc.text('Instagram: @iconnecture   |   WhatsApp: 341 366-3882', 15, 28);
 
           doc.setTextColor(255, 255, 255);
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(11);
           doc.text(`CERTIFICADO N° #${nroCert}`, 195, 14, { align: 'right' });
           doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9.5);
+          doc.setFontSize(9);
           doc.setTextColor(216, 180, 254);
           doc.text(`Fecha de entrega: ${fechaEnt}`, 195, 22, { align: 'right' });
 
           // TARJETAS DE CLIENTE Y EQUIPO
           doc.setFillColor(248, 250, 252);
           doc.setDrawColor(226, 232, 240);
-          doc.roundedRect(15, 44, 87, 34, 3, 3, 'FD');
-          doc.roundedRect(108, 44, 87, 34, 3, 3, 'FD');
+          doc.roundedRect(15, 45, 87, 34, 3, 3, 'FD');
+          doc.roundedRect(108, 45, 87, 34, 3, 3, 'FD');
 
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(8);
           doc.setTextColor(107, 33, 168);
-          doc.text('TITULAR DEL EQUIPO', 20, 51);
+          doc.text('TITULAR DEL EQUIPO', 20, 52);
           doc.setFontSize(11);
           doc.setTextColor(15, 23, 42);
-          doc.text(doc.splitTextToSize(nombreCli, 77)[0], 20, 59);
+          doc.text(doc.splitTextToSize(nombreCli, 77)[0], 20, 60);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(9.5);
           doc.setTextColor(71, 85, 105);
-          doc.text(eq.origen === 'cliente' ? `Teléfono: ${eq.clienteTelefono || 'No registrado'}` : 'Cuenta Mayorista / Gremio', 20, 66);
+          doc.text(eq.origen === 'cliente' ? `Teléfono: ${eq.clienteTelefono || 'No registrado'}` : 'Cuenta Mayorista / Gremio', 20, 67);
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          doc.text(eq.origen === 'cliente' ? 'Modalidad: Cliente Particular' : 'Modalidad: Gremio', 20, 73);
+          doc.text(eq.origen === 'cliente' ? 'Modalidad: Cliente Particular' : 'Modalidad: Gremio', 20, 74);
 
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(8);
           doc.setTextColor(107, 33, 168);
-          doc.text('DATOS DEL DISPOSITIVO', 113, 51);
+          doc.text('DATOS DEL DISPOSITIVO', 113, 52);
           doc.setFontSize(11);
           doc.setTextColor(15, 23, 42);
-          doc.text(doc.splitTextToSize(eq.modelo || '-', 77)[0], 113, 59);
+          doc.text(doc.splitTextToSize(eq.modelo || '-', 77)[0], 113, 60);
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(9.5);
           doc.setTextColor(51, 65, 85);
-          doc.text(`IMEI: ${eq.imei || '-'}`, 113, 66);
+          doc.text(`IMEI: ${eq.imei || '-'}`, 113, 67);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          doc.text(`Entregado el: ${fechaEnt}`, 113, 73);
+          doc.text(`Entregado el: ${fechaEnt}`, 113, 74);
 
           // RESUMEN DEL SERVICIO
-          let y = 90;
+          let y = 91;
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(9.5);
           doc.setTextColor(88, 28, 135);
@@ -1384,21 +1402,36 @@
           doc.setTextColor(71, 85, 105);
           doc.text(clLines, 22, y + 21);
 
-          // FIRMAS Y PIE DE PÁGINA
+          // FIRMA CURSIVA PREDETERMINADA ICONNECTURE + LÍNEAS DE FIRMA
+          doc.setFont('times', 'italic');
+          doc.setFontSize(22);
+          doc.setTextColor(46, 16, 101);
+          doc.text('iConnecture', 55, 251.5, { align: 'center' });
+          doc.setDrawColor(147, 51, 234);
+          doc.setLineWidth(0.35);
+          doc.line(37, 253.5, 73, 253.5);
+
+          doc.setLineWidth(0.2);
           doc.setDrawColor(148, 163, 184);
           doc.line(25, 258, 85, 258);
           doc.line(125, 258, 185, 258);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          doc.text('Firma Técnico Responsable', 55, 263.5, { align: 'center' });
+          doc.text('Firma Responsable • iConnecture', 55, 263.5, { align: 'center' });
           doc.text('Conformidad del Cliente', 155, 263.5, { align: 'center' });
 
+          // PIE DE PÁGINA CON CONTACTO
           doc.setDrawColor(226, 232, 240);
-          doc.line(15, 280, 195, 280);
-          doc.setFontSize(8);
+          doc.line(15, 277, 195, 277);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.setTextColor(88, 28, 135);
+          doc.text('iConnecture  •  Instagram: @iconnecture  •  WhatsApp: 341 366-3882', 105, 283, { align: 'center' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.5);
           doc.setTextColor(148, 163, 184);
-          doc.text(`Certificado digital #${nroCert} - Presentar este documento junto al equipo para gestionar la garantía.`, 105, 286, { align: 'center' });
+          doc.text(`Certificado digital #${nroCert} - Presentar este documento junto al equipo para gestionar la garantía.`, 105, 288.5, { align: 'center' });
 
           doc.save(`Garantia_${limpiarNombreArchivoPDF(eq.modelo)}_${limpiarNombreArchivoPDF(nombreCli)}.pdf`);
       };
@@ -2335,6 +2368,7 @@
                             <div className="flex gap-1">
                               <button onClick={() => setEditandoActivo({...item, tipo: item.tipo || 'billetera'})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs transition-colors"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => {
+                                  if (!window.confirm(`¿Seguro querés ELIMINAR "${item.nombre}" (${item.monto} ${item.moneda})?`)) return;
                                   const log = generarLog('Eliminó Billetera/Activo', `Eliminó "${item.nombre}" (${item.monto} ${item.moneda}).`, item);
                                   guardarEnNube({...db, activos: db.activos.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                               }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-7 h-7 rounded-lg text-xs transition-colors"><i className="fa-solid fa-trash"></i></button>
@@ -2413,6 +2447,7 @@
                                 <span className="font-mono font-black text-amber-400 text-sm">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                                 <button onClick={() => setEditandoFijo({...item})} className="bg-slate-800 text-slate-400 hover:text-white w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-pen"></i></button>
                                 <button onClick={() => {
+                                    if (!window.confirm(`¿Seguro querés ELIMINAR el gasto fijo "${item.concepto}"?`)) return;
                                     const log = generarLog('Eliminó Gasto Fijo', `Eliminó "${item.concepto}" del sistema.`, item);
                                     guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                                 }} className="bg-rose-950 text-rose-400 hover:bg-rose-900 w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-trash"></i></button>
@@ -3412,6 +3447,7 @@
                               <div className="flex gap-1.5 items-center">
                                 <button onClick={() => setEditandoDeuda({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
                                 <button onClick={() => {
+                                    if (!window.confirm(`¿Seguro querés ELIMINAR la deuda con "${item.acreedor}" (${item.monto} ${item.moneda})?`)) return;
                                     const log = generarLog('Eliminó Deuda', `Borró la deuda de "${item.acreedor}".`, item);
                                     guardarEnNube({...db, deudas: db.deudas.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
                                 }} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-trash"></i></button>
