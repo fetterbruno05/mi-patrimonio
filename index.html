@@ -124,7 +124,9 @@
       const [monedaVisual, setMonedaVisual] = useState('USD'); 
       const [modoPrivado, setModoPrivado] = useState(false); 
 
-      const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
+      const [nuevoActivo, setNuevoActivo] = useState({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera', tna: '' });
+      const [revisionTnaCola, setRevisionTnaCola] = useState([]);
+      const [revisionTnaForm, setRevisionTnaForm] = useState({ cambio: false, nuevaTna: '', saldoReal: '' });
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', monto: '', moneda: 'ARS', walletId: '' });
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
@@ -255,10 +257,57 @@
                 historiaProveedores: Array.isArray(data.payload.historiaProveedores) ? data.payload.historiaProveedores : ['Proveedor Principal'],
                 actividad: Array.isArray(data.payload.actividad) ? data.payload.actividad.filter(Boolean) : []
               };
-              setDb(baseCargada);
               const ahoraTs = Date.now();
+              const dHoy = new Date();
+              const hoyISO = `${dHoy.getFullYear()}-${String(dHoy.getMonth() + 1).padStart(2, '0')}-${String(dHoy.getDate()).padStart(2, '0')}`;
               const SEIS_HORAS = 6 * 60 * 60 * 1000;
               const SIETE_DIAS = 7 * 24 * 60 * 60 * 1000;
+
+              let huboInteres = false;
+              const logsInteres = [];
+              const colaRevision = [];
+
+              baseCargada.activos = baseCargada.activos.map(w => {
+                const tnaNum = parseFloat(w.tna) || 0;
+                if ((w.tipo === 'billetera' || !w.tipo) && tnaNum > 0) {
+                  let wAct = { ...w };
+                  if (!wAct.ultimoDiaInteres) {
+                    wAct.ultimoDiaInteres = hoyISO;
+                    huboInteres = true;
+                  } else if (wAct.ultimoDiaInteres !== hoyISO) {
+                    const [y1, m1, d1] = wAct.ultimoDiaInteres.split('-').map(Number);
+                    const [y2, m2, d2] = hoyISO.split('-').map(Number);
+                    const dias = Math.max(0, Math.round((new Date(y2, m2 - 1, d2) - new Date(y1, m1 - 1, d1)) / (1000 * 60 * 60 * 24)));
+                    const saldoBase = parseFloat(wAct.monto) || 0;
+                    if (dias > 0 && saldoBase > 0) {
+                      const nuevoSaldo = saldoBase * Math.pow(1 + ((tnaNum / 100) / 365), dias);
+                      const ganancia = Math.round(((nuevoSaldo - saldoBase) + Number.EPSILON) * 100) / 100;
+                      if (ganancia > 0) {
+                        wAct.monto = nuevoSaldo.toFixed(2);
+                        logsInteres.push(generarLog('Rendimiento Diario (Intereses)', `"${wAct.nombre}" generó +${ganancia.toLocaleString('es-AR')} ${wAct.moneda} (${dias} ${dias === 1 ? 'día' : 'días'} al ${tnaNum}% TNA).`));
+                      }
+                    }
+                    wAct.ultimoDiaInteres = hoyISO;
+                    huboInteres = true;
+                  }
+                  if (!wAct.tsUltimaRevisionTna || (ahoraTs - wAct.tsUltimaRevisionTna) >= SIETE_DIAS) {
+                    colaRevision.push(wAct);
+                  }
+                  return wAct;
+                }
+                return w;
+              });
+
+              if (huboInteres) {
+                if (logsInteres.length > 0) {
+                  baseCargada.actividad = [...logsInteres, ...(baseCargada.actividad || [])].slice(0, 500);
+                }
+                await supaClient.from('iconnecture_data').update({ payload: baseCargada }).eq('id', 1);
+              }
+
+              setDb(baseCargada);
+              if (colaRevision.length > 0) setRevisionTnaCola(colaRevision);
+
               if (!baseCargada.tsUltimaCotizacion || (ahoraTs - baseCargada.tsUltimaCotizacion) >= SEIS_HORAS) {
                   setCotizacionDiariaInput(baseCargada.cotizacionDolar);
                   setBloqueoCotizacion(true);
@@ -424,12 +473,60 @@
         return activosClon;
       };
 
+      const fechaHoyLocalISO = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+
       const agregarActivo = (e) => {
         e.preventDefault();
-        const item = { id: Date.now(), nombre: nuevoActivo.nombre.trim(), monto: parseFloat(nuevoActivo.monto) || 0, moneda: nuevoActivo.moneda, tipo: nuevoActivo.tipo };
-        const log = generarLog('Creó Billetera/Activo', `Creó ${item.tipo}: "${item.nombre}" con saldo inicial de ${item.monto} ${item.moneda}`, item);
+        const tnaNum = nuevoActivo.tipo === 'billetera' ? (parseFloat(nuevoActivo.tna) || 0) : 0;
+        const item = {
+          id: Date.now(),
+          nombre: nuevoActivo.nombre.trim(),
+          monto: parseFloat(nuevoActivo.monto) || 0,
+          moneda: nuevoActivo.moneda,
+          tipo: nuevoActivo.tipo,
+          tna: tnaNum,
+          ultimoDiaInteres: tnaNum > 0 ? fechaHoyLocalISO() : null,
+          tsUltimaRevisionTna: tnaNum > 0 ? Date.now() : null
+        };
+        const log = generarLog('Creó Billetera/Activo', `Creó ${item.tipo}: "${item.nombre}" con saldo inicial de ${item.monto} ${item.moneda}${tnaNum > 0 ? ` (TNA ${tnaNum}%)` : ''}`, item);
         guardarEnNube({ ...db, activos: [item, ...db.activos], actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setNuevoActivo({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera' });
+        setNuevoActivo({ nombre: '', monto: '', moneda: 'USD', tipo: 'billetera', tna: '' });
+      };
+
+      const confirmarRevisionTnaSemanal = (e, huboCambio) => {
+        if (e) e.preventDefault();
+        const walletActual = revisionTnaCola[0];
+        if (!walletActual) return;
+
+        const hoyISO = fechaHoyLocalISO();
+        let nuevaTna = parseFloat(walletActual.tna) || 0;
+        let nuevoSaldo = parseFloat(walletActual.monto) || 0;
+        let detalleLog = `Confirmó que "${walletActual.nombre}" mantiene su tasa en ${nuevaTna}% TNA.`;
+
+        if (huboCambio) {
+          nuevaTna = parseFloat(revisionTnaForm.nuevaTna);
+          if (isNaN(nuevaTna) || nuevaTna < 0) return alert('Ingresá un porcentaje anual (TNA) válido.');
+          const saldoIngresado = parseFloat(revisionTnaForm.saldoReal);
+          if (isNaN(saldoIngresado) || saldoIngresado < 0) return alert('Ingresá el saldo real actual que tenés en esta billetera.');
+          nuevoSaldo = saldoIngresado;
+          detalleLog = `Actualizó "${walletActual.nombre}" a ${nuevaTna}% TNA y ajustó saldo real a ${nuevoSaldo} ${walletActual.moneda}.`;
+        }
+
+        const activosAc = (db.activos || []).map(a => a.id === walletActual.id ? {
+          ...a,
+          tna: nuevaTna,
+          monto: nuevoSaldo.toFixed(2),
+          ultimoDiaInteres: nuevaTna > 0 ? hoyISO : null,
+          tsUltimaRevisionTna: Date.now()
+        } : a);
+
+        const log = generarLog('Control Semanal TNA', detalleLog);
+        guardarEnNube({ ...db, activos: activosAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setRevisionTnaCola(prev => prev.slice(1));
+        setRevisionTnaForm({ cambio: false, nuevaTna: '', saldoReal: '' });
       };
 
       const procesarTransferenciaInterna = (e) => {
@@ -1185,14 +1282,11 @@
           doc.setTextColor(100, 116, 139);
           doc.text(condLines, 22, yCond + 13);
 
-          // FIRMA CURSIVA PREDETERMINADA ICONNECTURE + LÍNEAS DE FIRMA
+          // FIRMA CURSIVA ESTILO LAPICERA NEGRA SOBRE LA LÍNEA
           doc.setFont('times', 'italic');
           doc.setFontSize(22);
-          doc.setTextColor(46, 16, 101);
-          doc.text('iConnecture', 55, 251.5, { align: 'center' });
-          doc.setDrawColor(147, 51, 234);
-          doc.setLineWidth(0.35);
-          doc.line(37, 253.5, 73, 253.5);
+          doc.setTextColor(15, 15, 20);
+          doc.text('iConnecture', 55, 256.2, { align: 'center' });
 
           doc.setLineWidth(0.2);
           doc.setDrawColor(148, 163, 184);
@@ -1402,14 +1496,11 @@
           doc.setTextColor(71, 85, 105);
           doc.text(clLines, 22, y + 21);
 
-          // FIRMA CURSIVA PREDETERMINADA ICONNECTURE + LÍNEAS DE FIRMA
+          // FIRMA CURSIVA ESTILO LAPICERA NEGRA SOBRE LA LÍNEA
           doc.setFont('times', 'italic');
           doc.setFontSize(22);
-          doc.setTextColor(46, 16, 101);
-          doc.text('iConnecture', 55, 251.5, { align: 'center' });
-          doc.setDrawColor(147, 51, 234);
-          doc.setLineWidth(0.35);
-          doc.line(37, 253.5, 73, 253.5);
+          doc.setTextColor(15, 15, 20);
+          doc.text('iConnecture', 55, 256.2, { align: 'center' });
 
           doc.setLineWidth(0.2);
           doc.setDrawColor(148, 163, 184);
@@ -2177,6 +2268,61 @@
           );
       }
 
+      if (revisionTnaCola.length > 0) {
+          const wRev = revisionTnaCola[0];
+          const tnaActual = parseFloat(wRev.tna) || 0;
+          const ganDiariaEst = ((parseFloat(wRev.monto) || 0) * ((tnaActual / 100) / 365));
+          return (
+            <div className="flex items-center justify-center altura-dinamica bg-slate-950 p-4 w-full">
+              <div className="bg-slate-900 border border-emerald-500/50 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl fade-in">
+                <div className="text-center space-y-1.5">
+                  <i className="fa-solid fa-percent text-3xl text-emerald-400 mb-1"></i>
+                  <h1 className="text-lg font-black text-white">Control Semanal de Intereses</h1>
+                  <p className="text-slate-400 text-xs">Pasó 1 semana desde tu último chequeo de <strong className="text-white">{wRev.nombre}</strong>.</p>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Saldo estimado hoy</span>
+                    <span className="font-mono font-black text-white text-sm">{parseFloat(wRev.monto).toLocaleString('es-AR')} {wRev.moneda}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-emerald-400 uppercase font-bold block">TNA Actual</span>
+                    <span className="font-mono font-black text-emerald-400 text-sm">{tnaActual}% anual</span>
+                    <span className="text-[9px] text-slate-500 font-mono block">(~+{ganDiariaEst.toFixed(0)} {wRev.moneda}/día)</span>
+                  </div>
+                </div>
+
+                {!revisionTnaForm.cambio ? (
+                  <div className="space-y-2.5 pt-1">
+                    <p className="text-xs text-center text-slate-300 font-bold">¿Cambió el porcentaje de interés anual de {wRev.nombre}?</p>
+                    <button type="button" onClick={() => confirmarRevisionTnaSemanal(null, false)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition text-xs">
+                      <i className="fa-solid fa-check mr-1.5"></i>No cambió (Sigue en {tnaActual}%)
+                    </button>
+                    <button type="button" onClick={() => setRevisionTnaForm({ cambio: true, nuevaTna: String(tnaActual), saldoReal: String(wRev.monto) })} className="w-full bg-slate-800 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/40 font-bold py-2.5 rounded-xl transition text-xs">
+                      <i className="fa-solid fa-pen mr-1.5"></i>Sí, cambió la tasa (y actualizar saldo)
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={(e) => confirmarRevisionTnaSemanal(e, true)} className="space-y-3 pt-1 fade-in">
+                    <div>
+                      <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">1. Nueva Tasa Anual (% TNA)</label>
+                      <input type="number" step="any" min="0" required autoFocus placeholder="Ej: 34.5 (0 para desactivar)" value={revisionTnaForm.nuevaTna} onChange={e => setRevisionTnaForm({...revisionTnaForm, nuevaTna: e.target.value})} className="w-full bg-slate-950 border border-amber-500 rounded-xl px-3 py-2 text-white font-mono text-sm focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-emerald-400 uppercase block mb-1">2. ¿Cuánto tenés hoy realmente en {wRev.nombre} ({wRev.moneda})?</label>
+                      <input type="number" step="any" min="0" required placeholder="Saldo exacto en la app" value={revisionTnaForm.saldoReal} onChange={e => setRevisionTnaForm({...revisionTnaForm, saldoReal: e.target.value})} className="w-full bg-slate-950 border border-emerald-500 rounded-xl px-3 py-2 text-emerald-400 font-mono font-black text-sm focus:outline-none" />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition text-xs">Guardar Tasa y Saldo</button>
+                      <button type="button" onClick={() => setRevisionTnaForm({ cambio: false, nuevaTna: '', saldoReal: '' })} className="bg-slate-800 text-white font-bold px-3 py-2.5 rounded-xl text-xs">Volver</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </div>
+          );
+      }
       return (
         <div className="flex altura-dinamica bg-slate-950 text-slate-100 overflow-hidden font-sans text-sm w-full">
           
@@ -2344,12 +2490,13 @@
                       <h3 className="text-sm font-bold text-white"><i className="fa-solid fa-wallet text-blue-400 mr-2"></i>Gestión de Cuentas y Activos</h3>
                     </div>
                     <form onSubmit={agregarActivo} className="bg-slate-950 p-3 rounded-xl border border-slate-800 grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                      <select value={nuevoActivo.tipo} onChange={e => setNuevoActivo({...nuevoActivo, tipo: e.target.value})} className="sm:col-span-3 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-blue-500"><option value="billetera">Dinero Líquido</option><option value="activo">Activo Físico</option></select>
-                      <input type="text" required placeholder="Nombre (Ej: Mercadopago o Auto)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="sm:col-span-4 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs" />
+                      <select value={nuevoActivo.tipo} onChange={e => setNuevoActivo({...nuevoActivo, tipo: e.target.value})} className="sm:col-span-2 bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white text-xs font-bold focus:outline-none focus:border-blue-500"><option value="billetera">Líquido</option><option value="activo">Físico</option></select>
+                      <input type="text" required placeholder="Nombre (Ej: Mercado Pago)" value={nuevoActivo.nombre} onChange={e => setNuevoActivo({...nuevoActivo, nombre: e.target.value})} className="sm:col-span-3 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs" />
                       <div className="sm:col-span-3 flex">
-                        <input type="number" step="any" required placeholder="Valor Inicial" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-blue-500 text-xs" />
+                        <input type="number" step="any" required placeholder="Saldo Inicial" value={nuevoActivo.monto} onChange={e => setNuevoActivo({...nuevoActivo, monto: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-blue-500 text-xs" />
                         <select value={nuevoActivo.moneda} onChange={e => setNuevoActivo({...nuevoActivo, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 border-l-0 rounded-r-xl px-2 py-2 text-white text-xs font-bold focus:outline-none focus:border-blue-500"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                       </div>
+                      <input type="number" step="any" min="0" disabled={nuevoActivo.tipo === 'activo'} placeholder={nuevoActivo.tipo === 'activo' ? 'No aplica' : '% TNA Anual (Opc.)'} value={nuevoActivo.tna || ''} onChange={e => setNuevoActivo({...nuevoActivo, tna: e.target.value})} className="sm:col-span-2 bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-emerald-400 font-mono text-xs disabled:opacity-40 focus:outline-none focus:border-emerald-500" />
                       <button type="submit" className="sm:col-span-2 bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-2 rounded-xl transition text-xs"><i className="fa-solid fa-plus mr-1"></i> Sumar</button>
                     </form>
 
@@ -2362,11 +2509,16 @@
                               {(!item.tipo || item.tipo === 'billetera') ? <i className="fa-solid fa-money-bill-1-wave text-[10px] text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded shrink-0"></i> : <i className="fa-solid fa-cube text-[10px] text-amber-400 bg-amber-950 px-1.5 py-0.5 rounded shrink-0"></i>}
                             </p>
                             {!modoPrivado && <p className="text-[11px] text-slate-500 font-mono mt-0.5">Base: {item.monto} {item.moneda}</p>}
+                            {parseFloat(item.tna) > 0 && (!item.tipo || item.tipo === 'billetera') && (
+                              <p className="text-[10px] text-emerald-400 font-mono font-bold mt-0.5">
+                                <i className="fa-solid fa-arrow-trend-up mr-1"></i>TNA {item.tna}% {!modoPrivado && `(~+${redondear((parseFloat(item.monto) || 0) * ((parseFloat(item.tna) / 100) / 365)).toLocaleString('es-AR')} ${item.moneda}/día)`}
+                              </p>
+                            )}
                           </div>
                           <div className="flex items-center gap-2.5 shrink-0">
                             <span className="font-mono font-black text-blue-400 text-base">{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                             <div className="flex gap-1">
-                              <button onClick={() => setEditandoActivo({...item, tipo: item.tipo || 'billetera'})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs transition-colors"><i className="fa-solid fa-pen"></i></button>
+                              <button onClick={() => setEditandoActivo({...item, tipo: item.tipo || 'billetera', tna: item.tna || '', tnaOriginal: item.tna || ''})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs transition-colors"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => {
                                   if (!window.confirm(`¿Seguro querés ELIMINAR "${item.nombre}" (${item.monto} ${item.moneda})?`)) return;
                                   const log = generarLog('Eliminó Billetera/Activo', `Eliminó "${item.nombre}" (${item.monto} ${item.moneda}).`, item);
@@ -5201,8 +5353,20 @@
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
                 e.preventDefault();
-                const actualizados = db.activos.map(a => a.id === editandoActivo.id ? { ...a, nombre: editandoActivo.nombre, monto: parseFloat(editandoActivo.monto) || 0, moneda: editandoActivo.moneda, tipo: editandoActivo.tipo } : a);
-                const log = generarLog('Editó Billetera/Activo', `Editó "${editandoActivo.nombre}". Saldo actual: ${editandoActivo.monto} ${editandoActivo.moneda}`, editandoActivo);
+                if (!window.confirm(`¿Confirmás guardar los cambios en "${editandoActivo.nombre}"?`)) return;
+                const nuevaTna = editandoActivo.tipo === 'billetera' ? (parseFloat(editandoActivo.tna) || 0) : 0;
+                const cambioTna = nuevaTna !== (parseFloat(editandoActivo.tnaOriginal) || 0);
+                const actualizados = db.activos.map(a => a.id === editandoActivo.id ? {
+                  ...a,
+                  nombre: editandoActivo.nombre,
+                  monto: parseFloat(editandoActivo.monto) || 0,
+                  moneda: editandoActivo.moneda,
+                  tipo: editandoActivo.tipo,
+                  tna: nuevaTna,
+                  ultimoDiaInteres: nuevaTna > 0 ? (cambioTna || !a.ultimoDiaInteres ? fechaHoyLocalISO() : a.ultimoDiaInteres) : null,
+                  tsUltimaRevisionTna: nuevaTna > 0 ? (cambioTna || !a.tsUltimaRevisionTna ? Date.now() : a.tsUltimaRevisionTna) : null
+                } : a);
+                const log = generarLog('Editó Billetera/Activo', `Editó "${editandoActivo.nombre}". Saldo: ${editandoActivo.monto} ${editandoActivo.moneda}${nuevaTna > 0 ? ` • TNA: ${nuevaTna}%` : ''}`, editandoActivo);
                 guardarEnNube({ ...db, activos: actualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoActivo(null);
               }} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-xs w-full space-y-4 shadow-2xl">
@@ -5210,10 +5374,27 @@
                 <div className="space-y-3 text-xs">
                   <div><label className="text-slate-400 font-bold mb-1 block">Tipo</label><select value={editandoActivo.tipo} onChange={e => setEditandoActivo({...editandoActivo, tipo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold"><option value="billetera">Dinero Líquido</option><option value="activo">Activo Físico</option></select></div>
                   <div><label className="text-slate-400 font-bold mb-1 block">Nombre</label><input type="text" required value={editandoActivo.nombre} onChange={e => setEditandoActivo({...editandoActivo, nombre: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" /></div>
+
+                  {editandoActivo.tipo === 'billetera' && (
+                    <div>
+                      <label className="text-emerald-400 font-bold mb-1 block">Interés Anual % TNA (Ej: Mercado Pago)</label>
+                      <input type="number" step="any" min="0" placeholder="0 = Sin rendimientos" value={editandoActivo.tna || ''} onChange={e => setEditandoActivo({...editandoActivo, tna: e.target.value})} className="w-full bg-slate-950 border border-emerald-500/50 rounded-xl px-3 py-2 text-emerald-400 font-mono font-bold" />
+                    </div>
+                  )}
+
+                  {editandoActivo.tipo === 'billetera' && (parseFloat(editandoActivo.tna) || 0) !== (parseFloat(editandoActivo.tnaOriginal) || 0) && (
+                    <div className="bg-amber-950/60 border border-amber-500/50 rounded-xl p-2.5 text-[11px] text-amber-200 fade-in">
+                      <i className="fa-solid fa-circle-info text-amber-400 mr-1.5"></i>
+                      <strong>Cambiaste la tasa de interés:</strong> verificá o actualizá abajo cuánto saldo real tenés hoy en esta billetera.
+                    </div>
+                  )}
+
                   <div>
-                    <label className="text-slate-400 font-bold mb-1 block">Saldo o Valor</label>
+                    <label className={`font-bold mb-1 block ${(parseFloat(editandoActivo.tna) || 0) !== (parseFloat(editandoActivo.tnaOriginal) || 0) ? 'text-amber-400' : 'text-slate-400'}`}>
+                      {(parseFloat(editandoActivo.tna) || 0) !== (parseFloat(editandoActivo.tnaOriginal) || 0) ? '¿Cuánto tenés hoy realmente?' : 'Saldo o Valor'}
+                    </label>
                     <div className="flex gap-2">
-                      <input type="number" step="any" required value={editandoActivo.monto} onChange={e => setEditandoActivo({...editandoActivo, monto: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                      <input type="number" step="any" required value={editandoActivo.monto} onChange={e => setEditandoActivo({...editandoActivo, monto: e.target.value})} className={`flex-1 min-w-0 bg-slate-950 border rounded-xl px-3 py-2 text-white font-mono ${(parseFloat(editandoActivo.tna) || 0) !== (parseFloat(editandoActivo.tnaOriginal) || 0) ? 'border-amber-500' : 'border-slate-700'}`} />
                       <select value={editandoActivo.moneda} onChange={e => setEditandoActivo({...editandoActivo, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                     </div>
                   </div>
