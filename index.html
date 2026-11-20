@@ -130,6 +130,7 @@
       const [nuevaTransferencia, setNuevaTransferencia] = useState({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       const [nuevoGastoPuntual, setNuevoGastoPuntual] = useState({ concepto: '', detalle: '', monto: '', moneda: 'ARS', walletId: '' });
       const [categoriaGastoAbierta, setCategoriaGastoAbierta] = useState(null);
+      const [filtroGraficoGastos, setFiltroGraficoGastos] = useState('todos');
       const [mostrarInputConceptoLibre, setMostrarInputConceptoLibre] = useState(false);
       const [nuevoGastoFijo, setNuevoGastoFijo] = useState({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       const [nuevaDeuda, setNuevaDeuda] = useState({ acreedor: '', motivo: '', monto: '', moneda: 'USD' });
@@ -602,18 +603,67 @@
         setNuevoGastoFijo({ concepto: '', monto: '', moneda: 'ARS', tipo: 'fijo', cuotasTotales: '3', diaVencimiento: '1' });
       };
 
+      const estaPagadoEsteMes = (itemFijo) => {
+        const hoy = new Date();
+        const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+        if (itemFijo.ultimoPagoMes) return itemFijo.ultimoPagoMes === mesActual;
+        if (itemFijo.ultimoPagoTs) {
+          const d = new Date(itemFijo.ultimoPagoTs);
+          return d.getFullYear() === hoy.getFullYear() && d.getMonth() === hoy.getMonth();
+        }
+        if (itemFijo.ultimoPago) {
+          const partes = String(itemFijo.ultimoPago).split('/').map(Number);
+          if (partes.length === 3) {
+            const anio = partes[2] < 100 ? 2000 + partes[2] : partes[2];
+            const mesIdx = partes[1] > 12 ? (partes[0] - 1) : (partes[1] - 1);
+            if (anio === hoy.getFullYear() && mesIdx === hoy.getMonth()) return true;
+          }
+        }
+        return false;
+      };
+
+      const obtenerEstadoGastoFijo = (itemFijo) => {
+        if (itemFijo.tipo === 'cuotas' && itemFijo.cuotasTotales && itemFijo.cuotasPagadas >= itemFijo.cuotasTotales) {
+          return { codigo: 'completado', texto: 'COMPLETADO', color: 'verde' };
+        }
+        if (estaPagadoEsteMes(itemFijo)) {
+          return { codigo: 'pagado', texto: `PAGADO (${itemFijo.ultimoPago || 'Este mes'})`, color: 'verde' };
+        }
+        const hoyDia = new Date().getDate();
+        const diaVenc = parseInt(itemFijo.diaVencimiento) || 1;
+        const diff = diaVenc - hoyDia;
+        if (diff === 0) return { codigo: 'vence_hoy', texto: 'VENCE HOY', color: 'rojo' };
+        if (diff < 0) return { codigo: 'vencido', texto: `VENCIDO (Día ${diaVenc})`, color: 'rojo' };
+        if (diff <= 5) return { codigo: 'por_vencer', texto: `Vence en ${diff} ${diff === 1 ? 'día' : 'días'}`, color: 'amarillo' };
+        return { codigo: 'pendiente', texto: `Día ${diaVenc} (Faltan ${diff}d)`, color: 'neutro' };
+      };
+
       const procesarPagoFijo = (itemFijo) => {
         if (!pagoActivo.walletId) return alert('Elegí una billetera.');
         const op = procesarDescuentoSeguro(pagoActivo.walletId, itemFijo.monto, itemFijo.moneda, db.activos);
-        if (!op.success) return alert(op.msg); 
+        if (!op.success) return alert(op.msg);
+        const hoy = new Date();
+        const fechaHoy = hoy.toLocaleDateString('es-AR');
+        const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+        const walletUsada = op.activosActualizados.find(w => w.id === parseInt(pagoActivo.walletId))?.nombre || 'Billetera';
+        const nuevoRegPago = { id: Date.now(), fecha: fechaHoy, monto: itemFijo.monto, moneda: itemFijo.moneda, pagadoCon: walletUsada };
         const gastosFijosAc = db.gastosFijos.map(g => {
-          if (g.id === itemFijo.id) return { ...g, cuotasPagadas: g.tipo === 'cuotas' ? g.cuotasPagadas + 1 : g.cuotasPagadas, ultimoPago: new Date().toLocaleDateString() };
+          if (g.id === itemFijo.id) {
+            return {
+              ...g,
+              cuotasPagadas: g.tipo === 'cuotas' ? g.cuotasPagadas + 1 : g.cuotasPagadas,
+              ultimoPago: fechaHoy,
+              ultimoPagoMes: mesActual,
+              ultimoPagoTs: Date.now(),
+              ultimoPagoWallet: walletUsada,
+              historialPagos: [nuevoRegPago, ...(g.historialPagos || [])]
+            };
+          }
           return g;
         });
-        const walletUsada = op.activosActualizados.find(w => w.id === parseInt(pagoActivo.walletId))?.nombre;
         const log = generarLog('Efectuó Pago', `Pagó "${itemFijo.concepto}" (${itemFijo.monto} ${itemFijo.moneda}) desde ${walletUsada}.`, itemFijo);
         guardarEnNube({ ...db, activos: op.activosActualizados, gastosFijos: gastosFijosAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setPagoActivo({ idGasto: null, walletId: '' }); 
+        setPagoActivo({ idGasto: null, walletId: '' });
       };
 
       const agregarDeuda = (e) => {
@@ -2264,18 +2314,42 @@
 
       const gastosPorCat = useMemo(() => {
         const mapa = {};
-        (db.gastosPuntuales || []).forEach(g => {
+        if (filtroGraficoGastos === 'todos' || filtroGraficoGastos === 'sueltos') {
+          (db.gastosPuntuales || []).forEach(g => {
             const val = convertirParaMostrar(g.monto, g.moneda);
             const cat = (g.concepto || 'Otros').trim();
-            if (!mapa[cat]) mapa[cat] = { categoria: cat, montoGrafico: 0, items: [] };
+            if (!mapa[cat]) mapa[cat] = { categoria: cat, montoGrafico: 0, tieneFijo: false, tieneSuelto: false, estadoFijo: null, items: [] };
             mapa[cat].montoGrafico += val;
-            mapa[cat].items.push(g);
-        });
+            mapa[cat].tieneSuelto = true;
+            mapa[cat].items.push({ ...g, esFijo: false });
+          });
+        }
+        if (filtroGraficoGastos === 'todos' || filtroGraficoGastos === 'fijos') {
+          (db.gastosFijos || []).forEach(f => {
+            const val = convertirParaMostrar(f.monto, f.moneda);
+            const cat = (f.concepto || 'Gasto Fijo').trim();
+            const est = obtenerEstadoGastoFijo(f);
+            if (!mapa[cat]) mapa[cat] = { categoria: cat, montoGrafico: 0, tieneFijo: false, tieneSuelto: false, estadoFijo: null, items: [] };
+            mapa[cat].montoGrafico += val;
+            mapa[cat].tieneFijo = true;
+            mapa[cat].estadoFijo = est;
+            mapa[cat].items.push({
+              id: `fijo_${f.id}`,
+              esFijo: true,
+              estadoFijo: est,
+              detalle: est.color === 'verde' ? `Gasto Fijo • ${est.texto}` : `Gasto Fijo • Pendiente (${est.texto})`,
+              fecha: f.ultimoPago ? `Últ. pago: ${f.ultimoPago}` : `Vence día ${f.diaVencimiento || 1}`,
+              pagadoCon: f.ultimoPagoWallet || (est.color === 'verde' ? 'Pagado' : 'Sin pagar este mes'),
+              monto: f.monto,
+              moneda: f.moneda
+            });
+          });
+        }
         const total = Object.values(mapa).reduce((a, b) => a + b.montoGrafico, 0);
         return Object.values(mapa)
           .map(c => ({ ...c, porcentaje: total ? (c.montoGrafico / total) * 100 : 0 }))
           .sort((a, b) => b.montoGrafico - a.montoGrafico);
-      }, [db.gastosPuntuales, db.cotizacionDolar, monedaVisual]);
+      }, [db.gastosPuntuales, db.gastosFijos, filtroGraficoGastos, db.cotizacionDolar, monedaVisual]);
 
       const logsFiltrados = (db.actividad || []).filter(l => {
           if (filtroUsuario && !l.usuario.toLowerCase().includes(filtroUsuario.toLowerCase())) return false;
@@ -2626,29 +2700,54 @@
                     </div>
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg">
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider"><i className="fa-solid fa-chart-pie mr-2 text-indigo-400"></i>Distribución de Gastos Sueltos</h3>
-                      <span className="text-[10px] text-slate-500">Tocá una categoría para ver el desglose</span>
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5">
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                          <i className="fa-solid fa-chart-pie mr-2 text-indigo-400"></i>Distribución de Gastos
+                        </h3>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          Total en vista: <strong className="text-white font-mono">{formatDinero(gastosPorCat.reduce((acc, c) => acc + c.montoGrafico, 0))}</strong> • Tocá una barra para ver el desglose
+                        </p>
+                      </div>
+                      <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex gap-1 w-full sm:w-auto">
+                        {[
+                          { id: 'todos', label: 'Todos (Fijos + Sueltos)' },
+                          { id: 'fijos', label: 'Solo Fijos' },
+                          { id: 'sueltos', label: 'Solo Sueltos' }
+                        ].map(tab => (
+                          <button key={tab.id} type="button" onClick={() => setFiltroGraficoGastos(tab.id)} className={`flex-1 sm:flex-initial px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${filtroGraficoGastos === tab.id ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                            {tab.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                     <div className="space-y-3">
-                      {gastosPorCat.length === 0 ? <p className="text-xs text-slate-500 text-center py-3">No hay gastos registrados.</p> : gastosPorCat.map((cat, i) => {
+                      {gastosPorCat.length === 0 ? <p className="text-xs text-slate-500 text-center py-3">No hay gastos registrados en esta vista.</p> : gastosPorCat.map((cat, i) => {
                           const abierto = categoriaGastoAbierta === cat.categoria;
+                          const colorBarra = cat.tieneFijo && !cat.tieneSuelto
+                            ? (cat.estadoFijo?.color === 'verde' ? 'bg-emerald-500' : cat.estadoFijo?.color === 'rojo' ? 'bg-rose-500' : 'bg-amber-500')
+                            : COLORES_GRAFICO[i % COLORES_GRAFICO.length];
                           return (
                             <div key={cat.categoria} className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-2.5 transition hover:border-indigo-500/40">
                               <button type="button" onClick={() => setCategoriaGastoAbierta(abierto ? null : cat.categoria)} className="w-full text-left">
-                                <div className="flex justify-between items-end mb-1.5">
-                                  <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                                <div className="flex justify-between items-end mb-1.5 gap-2">
+                                  <span className="font-bold text-white text-xs flex items-center gap-1.5 flex-wrap">
                                     <i className={`fa-solid ${abierto ? 'fa-chevron-down text-indigo-400' : 'fa-chevron-right text-slate-500'} text-[9px]`}></i>
                                     {cat.categoria}
+                                    {cat.tieneFijo && (
+                                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase border ${cat.estadoFijo?.color === 'verde' ? 'bg-emerald-950 text-emerald-400 border-emerald-600/50' : cat.estadoFijo?.color === 'rojo' ? 'bg-rose-950 text-rose-400 border-rose-600/50' : 'bg-amber-950 text-amber-400 border-amber-600/50'}`}>
+                                        Fijo • {cat.estadoFijo?.color === 'verde' ? 'Pagado' : cat.estadoFijo?.color === 'rojo' ? 'Vencido/Hoy' : 'Pendiente'}
+                                      </span>
+                                    )}
                                     <span className="text-[10px] font-mono text-slate-500 font-normal">({cat.items.length})</span>
                                   </span>
-                                  <div className="text-right">
+                                  <div className="text-right shrink-0">
                                     <span className="font-mono text-xs text-slate-300 mr-2">{formatDinero(cat.montoGrafico)}</span>
                                     {!modoPrivado && <span className="font-black text-white bg-slate-800 px-1.5 py-0.5 rounded text-[10px]">{cat.porcentaje.toFixed(1)}%</span>}
                                   </div>
                                 </div>
-                                <div className="w-full bg-slate-950 rounded-full h-2 border border-slate-800 overflow-hidden"><div className={`h-full rounded-full ${COLORES_GRAFICO[i % COLORES_GRAFICO.length]}`} style={{width: modoPrivado ? '0%' : `${cat.porcentaje}%`}}></div></div>
+                                <div className="w-full bg-slate-950 rounded-full h-2 border border-slate-800 overflow-hidden"><div className={`h-full rounded-full ${colorBarra}`} style={{width: modoPrivado ? '0%' : `${cat.porcentaje}%`}}></div></div>
                               </button>
 
                               {abierto && (
@@ -2656,12 +2755,12 @@
                                   {cat.items.map(gItem => (
                                     <div key={gItem.id} className="bg-slate-900 border border-slate-800/80 rounded-lg px-2.5 py-1.5 flex justify-between items-center gap-2 text-xs">
                                       <div className="min-w-0">
-                                        <p className="font-bold text-slate-200 truncate">
+                                        <p className={`font-bold truncate ${gItem.esFijo ? (gItem.estadoFijo?.color === 'verde' ? 'text-emerald-400' : gItem.estadoFijo?.color === 'rojo' ? 'text-rose-400' : 'text-amber-400') : 'text-slate-200'}`}>
                                           {gItem.detalle ? gItem.detalle : <span className="text-slate-500 italic font-normal">Sin detalle específico</span>}
                                         </p>
                                         <p className="text-[10px] text-slate-500">{gItem.fecha} • {gItem.pagadoCon}</p>
                                       </div>
-                                      <span className="font-mono font-black text-indigo-400 shrink-0">-{formatDinero(convertirParaMostrar(gItem.monto, gItem.moneda))}</span>
+                                      <span className={`font-mono font-black shrink-0 ${gItem.esFijo ? 'text-amber-400' : 'text-indigo-400'}`}>-{formatDinero(convertirParaMostrar(gItem.monto, gItem.moneda))}</span>
                                     </div>
                                   ))}
                                 </div>
@@ -2695,46 +2794,97 @@
                         </div>
                       </form>
                       <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                        {(db.gastosFijos || []).length === 0 ? <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.gastosFijos.map(item => (
-                          <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col gap-2">
-                            <div className="flex justify-between items-start gap-2">
-                              <div className="min-w-0">
-                                <p className="font-bold text-white text-xs sm:text-sm truncate">{item.concepto} {item.tipo === 'cuotas' ? <span className="bg-amber-950 text-amber-400 px-1.5 py-0.5 rounded text-[10px] ml-1">Cuota {item.cuotasPagadas}/{item.cuotasTotales}</span> : <span className="bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded text-[9px] ml-1">Día {item.diaVencimiento}</span>}</p>
-                                {!modoPrivado && <p className="text-[10px] text-slate-500 font-mono mt-0.5">Base: {item.monto} {item.moneda}</p>}
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="font-mono font-black text-amber-400 text-sm">-{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
-                                <button onClick={() => setEditandoFijo({...item})} className="bg-slate-800 text-slate-400 hover:text-white w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-pen"></i></button>
-                                <button onClick={() => {
-                                    if (!window.confirm(`¿Seguro querés ELIMINAR el gasto fijo "${item.concepto}"?`)) return;
-                                    const log = generarLog('Eliminó Gasto Fijo', `Eliminó "${item.concepto}" del sistema.`, item);
-                                    guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
-                                }} className="bg-rose-950 text-rose-400 hover:bg-rose-900 w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-trash"></i></button>
-                              </div>
-                            </div>
+                        <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                        {(db.gastosFijos || []).length === 0 ? <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.gastosFijos.map(item => {
+                          const est = obtenerEstadoGastoFijo(item);
+                          const cardClase = est.color === 'verde'
+                            ? 'bg-emerald-950/25 border-emerald-500/60'
+                            : est.color === 'rojo'
+                              ? 'bg-rose-950/30 border-rose-500/80'
+                              : est.color === 'amarillo'
+                                ? 'bg-amber-950/25 border-amber-400/70'
+                                : 'bg-slate-950 border-slate-800';
+                          const badgeClase = est.color === 'verde'
+                            ? 'bg-emerald-950 border border-emerald-500/50 text-emerald-300'
+                            : est.color === 'rojo'
+                              ? 'bg-rose-950 border border-rose-500/70 text-rose-300 animate-pulse'
+                              : est.color === 'amarillo'
+                                ? 'bg-amber-950 border border-amber-400/60 text-amber-300'
+                                : 'bg-slate-800 text-slate-300';
+                          const botonPagarClase = est.color === 'rojo'
+                            ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 shadow-md'
+                            : est.color === 'amarillo'
+                              ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-400'
+                              : 'bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border-emerald-800/80';
 
-                            {pagoActivo.idGasto === item.id ? (
-                              <div className="bg-slate-900 p-2.5 rounded-lg border border-amber-500/50 flex flex-col gap-2 fade-in">
-                                <select value={pagoActivo.walletId} onChange={e => setPagoActivo({...pagoActivo, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
-                                  <option value="">¿De qué billetera pagás?</option>
-                                  {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
-                                </select>
-                                <div className="flex gap-2">
-                                  <button onClick={() => procesarPagoFijo(item)} className="flex-1 bg-emerald-600 text-white font-bold px-2 py-1.5 rounded-lg text-xs">Pagar</button>
-                                  <button onClick={() => setPagoActivo({idGasto: null, walletId: ''})} className="bg-slate-800 text-white px-2.5 py-1.5 rounded-lg text-xs">Cancelar</button>
+                          return (
+                            <div key={item.id} className={`border rounded-xl p-3 flex flex-col gap-2 transition ${cardClase}`}>
+                              <div className="flex justify-between items-start gap-2">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="font-bold text-white text-xs sm:text-sm truncate">{item.concepto}</p>
+                                    {item.tipo === 'cuotas' && (
+                                      <span className="bg-amber-950 text-amber-400 px-1.5 py-0.5 rounded text-[10px] font-bold">Cuota {item.cuotasPagadas}/{item.cuotasTotales}</span>
+                                    )}
+                                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${badgeClase}`}>
+                                      {est.color === 'verde' && <i className="fa-solid fa-circle-check mr-1"></i>}
+                                      {est.color === 'amarillo' && <i className="fa-solid fa-clock mr-1"></i>}
+                                      {est.color === 'rojo' && <i className="fa-solid fa-triangle-exclamation mr-1"></i>}
+                                      {est.texto}
+                                    </span>
+                                  </div>
+                                  {!modoPrivado && (
+                                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                      Base: {item.monto} {item.moneda} • Día {item.diaVencimiento || 1}
+                                      {item.ultimoPagoWallet && est.color === 'verde' ? ` • Vía ${item.ultimoPagoWallet}` : ''}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className={`font-mono font-black text-sm ${est.color === 'verde' ? 'text-emerald-400' : est.color === 'rojo' ? 'text-rose-400' : 'text-amber-400'}`}>
+                                    -{formatDinero(convertirParaMostrar(item.monto, item.moneda))}
+                                  </span>
+                                  <button onClick={() => setEditandoFijo({...item, diaVencimiento: item.diaVencimiento || '1'})} className="bg-slate-800 text-slate-400 hover:text-white w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-pen"></i></button>
+                                  <button onClick={() => {
+                                      if (!window.confirm(`¿Seguro querés ELIMINAR el gasto fijo "${item.concepto}"?`)) return;
+                                      const log = generarLog('Eliminó Gasto Fijo', `Eliminó "${item.concepto}" del sistema.`, item);
+                                      guardarEnNube({...db, gastosFijos: db.gastosFijos.filter(x => x.id !== item.id), actividad: [log, ...(db.actividad || [])].slice(0, 500)});
+                                  }} className="bg-rose-950 text-rose-400 hover:bg-rose-900 w-6 h-6 rounded text-[10px]"><i className="fa-solid fa-trash"></i></button>
                                 </div>
                               </div>
-                            ) : (
-                              (!item.cuotasTotales || item.cuotasPagadas < item.cuotasTotales) && (
-                                <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800/80 py-1.5 rounded-lg text-[11px] font-bold transition">
-                                  Pagar
-                                </button>
-                              )
-                            )}
-                          </div>
-                        ))}
+
+                              {pagoActivo.idGasto === item.id ? (
+                                <div className="bg-slate-900 p-2.5 rounded-lg border border-amber-500/50 flex flex-col gap-2 fade-in">
+                                  <select value={pagoActivo.walletId} onChange={e => setPagoActivo({...pagoActivo, walletId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                                    <option value="">¿De qué billetera pagás?</option>
+                                    {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                                  </select>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => procesarPagoFijo(item)} className="flex-1 bg-emerald-600 text-white font-bold px-2 py-1.5 rounded-lg text-xs">Confirmar Pago</button>
+                                    <button onClick={() => setPagoActivo({idGasto: null, walletId: ''})} className="bg-slate-800 text-white px-2.5 py-1.5 rounded-lg text-xs">Cancelar</button>
+                                  </div>
+                                </div>
+                              ) : est.color === 'verde' ? (
+                                <div className="flex justify-between items-center bg-emerald-950/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-[11px]">
+                                  <span className="text-emerald-300 font-bold">
+                                    <i className="fa-solid fa-check-double mr-1.5"></i>
+                                    {est.codigo === 'completado' ? 'Todas las cuotas pagas' : `Pagado este mes (${item.ultimoPago})`}
+                                  </span>
+                                  {est.codigo !== 'completado' && (
+                                    <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className="text-[10px] text-slate-400 hover:text-white underline font-bold">Pagar otro</button>
+                                  )}
+                                </div>
+                              ) : (
+                                (!item.cuotasTotales || item.cuotasPagadas < item.cuotasTotales) && (
+                                  <button onClick={() => setPagoActivo({ idGasto: item.id, walletId: '' })} className={`w-full border py-1.5 rounded-lg text-[11px] font-bold transition ${botonPagarClase}`}>
+                                    {est.color === 'rojo' ? `Pagar ahora (${est.texto})` : est.color === 'amarillo' ? `Pagar (${est.texto})` : 'Pagar'}
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
-                    </div>
 
                     {/* Sueltos */}
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
@@ -5802,15 +5952,28 @@
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
               <form onSubmit={(e) => {
                 e.preventDefault();
-              if (!window.confirm(`¿Confirmás guardar los cambios en el gasto fijo "${editandoFijo.concepto}"?`)) return;
-                const actualizados = db.gastosFijos.map(g => g.id === editandoFijo.id ? { ...g, concepto: editandoFijo.concepto, monto: parseFloat(editandoFijo.monto) || 0, moneda: editandoFijo.moneda } : g);
-                const log = generarLog('Editó Gasto Fijo', `Editó "${editandoFijo.concepto}". Monto base: ${editandoFijo.monto} ${editandoFijo.moneda}`, editandoFijo);
+                if (!window.confirm(`¿Confirmás guardar los cambios en el gasto fijo "${editandoFijo.concepto}"?`)) return;
+                const actualizados = db.gastosFijos.map(g => g.id === editandoFijo.id ? {
+                  ...g,
+                  concepto: editandoFijo.concepto,
+                  monto: parseFloat(editandoFijo.monto) || 0,
+                  moneda: editandoFijo.moneda,
+                  diaVencimiento: editandoFijo.diaVencimiento || '1'
+                } : g);
+                const log = generarLog('Editó Gasto Fijo', `Editó "${editandoFijo.concepto}". Monto base: ${editandoFijo.monto} ${editandoFijo.moneda} (Día ${editandoFijo.diaVencimiento || '1'})`, editandoFijo);
                 guardarEnNube({ ...db, gastosFijos: actualizados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
                 setEditandoFijo(null);
               }} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-xs w-full space-y-4 shadow-2xl">
                 <h3 className="font-black text-white text-base border-b border-slate-800 pb-2.5">Editar Gasto Fijo</h3>
                 <div className="space-y-3 text-xs">
-                  <div><label className="text-slate-400 font-bold mb-1 block">Concepto</label><input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" /></div>
+                  <div>
+                    <label className="text-slate-400 font-bold mb-1 block">Concepto</label>
+                    <input type="text" required value={editandoFijo.concepto} onChange={e => setEditandoFijo({...editandoFijo, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-amber-400 font-bold mb-1 block">Día de Vencimiento (1 al 31)</label>
+                    <input type="number" min="1" max="31" required value={editandoFijo.diaVencimiento || '1'} onChange={e => setEditandoFijo({...editandoFijo, diaVencimiento: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
                   <div>
                     <label className="text-slate-400 font-bold mb-1 block">Precio Original</label>
                     <div className="flex gap-2">
