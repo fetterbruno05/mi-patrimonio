@@ -151,6 +151,8 @@
         copiado: false,
         modoMulti: 'separado',
         items: [],
+        mostrarMasivo: false,
+        textoMasivo: '',
         planes: [
           { cuotas: 3, recargo: 22, activo: true },
           { cuotas: 6, recargo: 33, activo: true },
@@ -5196,6 +5198,101 @@
                   setCalcCuotas({ ...calcCuotas, items: itemsMulti.filter(i => i.id !== idItem) });
                 };
 
+                const parsearMontoTexto = (str) => {
+                  let limpio = (str || '').trim();
+                  if (/^\d{1,3}(\.\d{3})+$/.test(limpio)) {
+                    limpio = limpio.replace(/\./g, '');
+                  } else if (limpio.includes('.') && limpio.includes(',')) {
+                    if (limpio.lastIndexOf(',') > limpio.lastIndexOf('.')) {
+                      limpio = limpio.replace(/\./g, '').replace(',', '.');
+                    } else {
+                      limpio = limpio.replace(/,/g, '');
+                    }
+                  } else if (limpio.includes(',')) {
+                    if (/^\d{1,3}(,\d{3})+$/.test(limpio)) limpio = limpio.replace(/,/g, '');
+                    else limpio = limpio.replace(',', '.');
+                  }
+                  return parseFloat(limpio) || 0;
+                };
+
+                const detectarPrecioEnLinea = (linea) => {
+                  const matchUsdPost = linea.match(/\$?\s*(\d[\d.,]*)\s*(?:\b(?:usd|dólares|dolares)\b|u\$d|u\$s|us\$)/i);
+                  if (matchUsdPost) {
+                    const val = parsearMontoTexto(matchUsdPost[1]);
+                    if (val > 0) return { monto: val, moneda: 'USD' };
+                  }
+                  const matchUsdPre = linea.match(/(?:\b(?:usd)\b|u\$d|u\$s|us\$)\s*\$?\s*(\d[\d.,]*)/i);
+                  if (matchUsdPre) {
+                    const val = parsearMontoTexto(matchUsdPre[1]);
+                    if (val > 0) return { monto: val, moneda: 'USD' };
+                  }
+                  const matchArsPost = linea.match(/\$?\s*(\d[\d.,]*)\s*\b(?:ars|pesos)\b/i);
+                  if (matchArsPost) {
+                    const val = parsearMontoTexto(matchArsPost[1]);
+                    if (val > 0) return { monto: val, moneda: 'ARS' };
+                  }
+                  const matchArsPre = linea.match(/\bars\s*\$?\s*(\d[\d.,]*)/i);
+                  if (matchArsPre) {
+                    const val = parsearMontoTexto(matchArsPre[1]);
+                    if (val > 0) return { monto: val, moneda: 'ARS' };
+                  }
+                  const todosPesos = [...linea.matchAll(/\$\s*(\d[\d.,]*)/g)];
+                  if (todosPesos.length > 0) {
+                    const val = parsearMontoTexto(todosPesos[todosPesos.length - 1][1]);
+                    if (val > 0) return { monto: val, moneda: val < 10000 ? 'USD' : 'ARS' };
+                  }
+                  return null;
+                };
+
+                const procesarListaPegadaCuotas = (sumarALaActual = false, copiarDirecto = false) => {
+                  const lineasRaw = (calcCuotas.textoMasivo || '').split('\n');
+                  const detectados = [];
+                  lineasRaw.forEach((l, idxL) => {
+                    const lineaTrim = l.trim();
+                    if (!lineaTrim) return;
+                    const precioDet = detectarPrecioEnLinea(lineaTrim);
+                    if (!precioDet) return;
+                    const tituloLimpio = lineaTrim.replace(/^(?:📱\s*|\*\s*|[-•]\s*)+/, '').replace(/\*+$/, '').trim();
+                    detectados.push({
+                      id: Date.now() + idxL + Math.random(),
+                      concepto: tituloLimpio,
+                      monto: precioDet.monto,
+                      moneda: precioDet.moneda
+                    });
+                  });
+
+                  if (detectados.length === 0) {
+                    return alert('No detecté precios en el texto. Revisá que cada línea tenga el valor (ej: $1245 USD o $90.000).');
+                  }
+
+                  const listaFinal = sumarALaActual ? [...itemsMulti, ...detectados] : detectados;
+
+                  if (copiarDirecto) {
+                    const bloques = listaFinal.map(it => {
+                      const c = calcularBloqueCuotas(it.monto, it.moneda);
+                      const renglones = [`📱 *${it.concepto}*`];
+                      c.planes.filter(p => p.activo).forEach(p => {
+                        const txtTotal = calcCuotas.mostrarTotalEnTexto ? ` (Total: $${p.totalFinal.toLocaleString('es-AR')})` : '';
+                        renglones.push(`- *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
+                      });
+                      return renglones.join('\n');
+                    });
+                    navigator.clipboard.writeText(bloques.join('\n\n'));
+                  }
+
+                  setCalcCuotas({
+                    ...calcCuotas,
+                    items: listaFinal,
+                    modoMulti: 'separado',
+                    incluirContado: false,
+                    mostrarMasivo: false,
+                    copiado: copiarDirecto
+                  });
+                  if (copiarDirecto) {
+                    setTimeout(() => setCalcCuotas(prev => ({ ...prev, copiado: false })), 2500);
+                  }
+                };
+
                 const togglePlanCuota = (idx) => {
                   const copia = calcCuotas.planes.map((p, i) => i === idx ? { ...p, activo: !p.activo } : p);
                   setCalcCuotas({ ...calcCuotas, planes: copia });
@@ -5232,7 +5329,7 @@
                     lineas.push(`💳 *Tarjeta de Crédito (Cuotas Fijas):*`);
                     calcIndividual.planes.filter(p => p.activo).forEach(p => {
                       const txtTotal = calcCuotas.mostrarTotalEnTexto ? ` (Total: $${p.totalFinal.toLocaleString('es-AR')})` : '';
-                      lineas.push(`• *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
+                      lineas.push(`- *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
                     });
                     return lineas.join('\n');
                   }
@@ -5251,7 +5348,7 @@
                     lineas.push(`💳 *Tarjeta de Crédito (Cuotas Fijas por todo junto):*`);
                     calcCombo.planes.filter(p => p.activo).forEach(p => {
                       const txtTotal = calcCuotas.mostrarTotalEnTexto ? ` (Total: $${p.totalFinal.toLocaleString('es-AR')})` : '';
-                      lineas.push(`• *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
+                      lineas.push(`- *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
                     });
                     return lineas.join('\n');
                   }
@@ -5269,7 +5366,7 @@
                     }
                     it.calc.planes.filter(p => p.activo).forEach(p => {
                       const txtTotal = calcCuotas.mostrarTotalEnTexto ? ` (Total: $${p.totalFinal.toLocaleString('es-AR')})` : '';
-                      lineas.push(`• *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
+                      lineas.push(`- *${p.cuotas} cuotas fijas* de $${p.valorCuota.toLocaleString('es-AR')}${txtTotal}`);
                     });
                   });
                   return lineas.join('\n');
@@ -5293,15 +5390,56 @@
                           <h3 className="text-sm font-black text-white flex items-center gap-2">
                             <i className="fa-solid fa-credit-card text-indigo-400"></i> Simulador de Cuotas Posnet (1 o Varios Equipos)
                           </h3>
-                          <p className="text-[11px] text-slate-400">Cotizá al instante o tocá <strong>"+ Sumar a lista"</strong> para armar un presupuesto con varios modelos a la vez.</p>
+                          <p className="text-[11px] text-slate-400">Cotizá al instante, sumá uno por uno o pegá una lista entera para calcular todo junto.</p>
                         </div>
-                        <div className="bg-indigo-950/60 border border-indigo-500/40 rounded-xl px-3 py-1.5 text-right shrink-0">
-                          <span className="text-[9px] font-bold text-indigo-300 uppercase block">Dólar Posnet Aplicado</span>
-                          <span className="font-mono font-black text-white text-sm">
-                            $ {dolarPosnet.toLocaleString('es-AR')} <span className="text-[10px] font-normal text-indigo-300">(${dolarContado} + ${extraNum})</span>
-                          </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button type="button" onClick={() => setCalcCuotas({...calcCuotas, mostrarMasivo: !calcCuotas.mostrarMasivo})} className={`px-3 py-2 rounded-xl text-xs font-black border transition flex items-center gap-1.5 ${calcCuotas.mostrarMasivo ? 'bg-indigo-600 text-white border-indigo-400 shadow-md' : 'bg-slate-950 text-indigo-300 border-indigo-500/50 hover:bg-slate-800'}`}>
+                            <i className={`fa-solid ${calcCuotas.mostrarMasivo ? 'fa-chevron-up' : 'fa-wand-magic-sparkles'}`}></i>
+                            {calcCuotas.mostrarMasivo ? 'Ocultar Pegado' : '📋 Pegar Lista Masiva'}
+                          </button>
+                          <div className="bg-indigo-950/60 border border-indigo-500/40 rounded-xl px-3 py-1.5 text-right shrink-0">
+                            <span className="text-[9px] font-bold text-indigo-300 uppercase block">Dólar Posnet Aplicado</span>
+                            <span className="font-mono font-black text-white text-sm">
+                              $ {dolarPosnet.toLocaleString('es-AR')} <span className="text-[10px] font-normal text-indigo-300">(${dolarContado} + ${extraNum})</span>
+                            </span>
+                          </div>
                         </div>
                       </div>
+
+                      {/* CAJA DE PEGADO MASIVO AUTOMÁTICO */}
+                      {calcCuotas.mostrarMasivo && (
+                        <div className="bg-slate-950 border-2 border-indigo-500/50 rounded-xl p-3.5 space-y-2.5 fade-in">
+                          <div className="flex justify-between items-center gap-2">
+                            <label className="text-[10px] font-black text-indigo-300 uppercase tracking-wider">
+                              <i className="fa-solid fa-paste mr-1.5"></i>Pegá acá tus líneas de equipos (1 por renglón, en USD o ARS)
+                            </label>
+                            {calcCuotas.textoMasivo && (
+                              <button type="button" onClick={() => setCalcCuotas({...calcCuotas, textoMasivo: ''})} className="text-[10px] text-slate-400 hover:text-rose-400 font-bold">Limpiar texto</button>
+                            )}
+                          </div>
+                          <textarea
+                            rows="4"
+                            autoFocus
+                            placeholder={'Pegá tu lista acá, por ejemplo:\niPhone 17 Pro Max | 256 GB | 🔋 96-99% | 🎨 Naranja | 💵 $1245 USD\niPhone 17 Pro Max | 256 GB | 🔋 95% | 🎨 Silver | 💵 $1235 USD'}
+                            value={calcCuotas.textoMasivo || ''}
+                            onChange={e => setCalcCuotas({...calcCuotas, textoMasivo: e.target.value})}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-xs font-mono focus:outline-none focus:border-indigo-500 resize-y"
+                          ></textarea>
+                          <div className="flex flex-wrap gap-2 justify-end">
+                            {enModoMulti && (
+                              <button type="button" onClick={() => procesarListaPegadaCuotas(true, false)} className="bg-slate-800 hover:bg-slate-700 text-indigo-300 font-bold px-3 py-2 rounded-xl text-xs transition border border-indigo-500/30">
+                                <i className="fa-solid fa-plus mr-1"></i>Sumar a la lista actual
+                              </button>
+                            )}
+                            <button type="button" onClick={() => procesarListaPegadaCuotas(false, false)} className="bg-indigo-600 hover:bg-indigo-500 text-white font-black px-3.5 py-2 rounded-xl text-xs transition shadow">
+                              <i className="fa-solid fa-calculator mr-1.5"></i>Calcular Lista
+                            </button>
+                            <button type="button" onClick={() => procesarListaPegadaCuotas(false, true)} className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-3.5 py-2 rounded-xl text-xs transition shadow">
+                              <i className="fa-solid fa-bolt mr-1.5"></i>Calcular y Copiar Directo
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
                         <div className="sm:col-span-4">
