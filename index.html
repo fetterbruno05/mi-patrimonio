@@ -2794,7 +2794,6 @@
                         </div>
                       </form>
                       <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                        <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
                         {(db.gastosFijos || []).length === 0 ? <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : db.gastosFijos.map(item => {
                           const est = obtenerEstadoGastoFijo(item);
                           const cardClase = est.color === 'verde'
@@ -2885,6 +2884,7 @@
                           );
                         })}
                       </div>
+                    </div>
 
                     {/* Sueltos */}
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
