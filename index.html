@@ -179,9 +179,9 @@
 
       const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
 
-      const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
+      const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS', reparadoAntesIngreso: 'no', detalleReparadoIngreso: '' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
-      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
+      const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '', abiertoPreviamente: '', detalleAbiertoPreviamente: '' });
       const [menuRepFinAbierto, setMenuRepFinAbierto] = useState(false);
       const [busquedaRepFin, setBusquedaRepFin] = useState('');
       const [panelCobroReparacion, setPanelCobroReparacion] = useState({ idReparacion: null, walletId: '', montoCobro: '', monedaPago: 'ARS', metodoPago: '' });
@@ -1148,14 +1148,16 @@
               clienteTelefono: nuevaReparacion.origen === 'cliente' ? nuevaReparacion.clienteTelefono.trim() : '',
               estadoVisual: nuevaReparacion.estadoVisual.trim(), falla: nuevaReparacion.falla.trim(),
               presupuesto: nuevaReparacion.origen === 'cliente' ? (parseFloat(nuevaReparacion.presupuesto) || null) : null,
-              presupuestoMoneda: nuevaReparacion.origen === 'cliente' ? nuevaReparacion.presupuestoMoneda : 'ARS'
+              presupuestoMoneda: nuevaReparacion.origen === 'cliente' ? nuevaReparacion.presupuestoMoneda : 'ARS',
+              reparadoAntesIngreso: nuevaReparacion.origen === 'cliente' ? (nuevaReparacion.reparadoAntesIngreso || 'no') : '',
+              detalleReparadoIngreso: nuevaReparacion.origen === 'cliente' && nuevaReparacion.reparadoAntesIngreso === 'si' ? (nuevaReparacion.detalleReparadoIngreso || '').trim() : ''
           };
           let historiaGremios = db.historiaGremios || ['iConnecture'];
           if (itemTaller.origen === 'gremio' && itemTaller.gremio) historiaGremios = [...new Set([itemTaller.gremio, ...historiaGremios])];
           const propietarioLog = itemTaller.origen === 'cliente' ? itemTaller.clienteNombre : itemTaller.gremio;
           const log = generarLog('Ingresó a Taller', `Ingresó ${itemTaller.modelo} (${itemTaller.origen}: ${propietarioLog}).`, itemTaller);
           guardarEnNube({ ...db, taller: [itemTaller, ...(db.taller || [])], historiaGremios, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setNuevaReparacion({ origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS' });
+          setNuevaReparacion({ origen: nuevaReparacion.origen, gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS', reparadoAntesIngreso: 'no', detalleReparadoIngreso: '' });
           setMostrarInputGremioLibre(false);
       };
 
@@ -1189,6 +1191,12 @@
               `🔧 *Trabajo / Falla declarada:* ${item.falla}`,
               `📝 *Estado visual al ingresar:* ${item.estadoVisual || 'Sin observaciones'}`
           ];
+          if (item.origen === 'cliente' && item.reparadoAntesIngreso) {
+              const txtAnt = item.reparadoAntesIngreso === 'si'
+                  ? `Sí${item.detalleReparadoIngreso ? ` (${item.detalleReparadoIngreso})` : ''}`
+                  : item.reparadoAntesIngreso === 'no_sabe' ? 'Cliente no sabe' : 'No';
+              lineas.push(`🔍 *Reparación previa declarada:* ${txtAnt}`);
+          }
           if (presLinea) lineas.push(`💰 *Presupuesto estimado:* ${presLinea}`);
           lineas.push(`━━━━━━━━━━━━━━━━━━`);
           lineas.push(`_Conservá este comprobante para retirar tu equipo._`);
@@ -1240,6 +1248,9 @@
               `🛡️ *Garantía:* ${textoPlazo}`
           ];
           if (eq.estadoVisual) lineas.push(`📝 *Obs. de ingreso:* ${eq.estadoVisual}`);
+          if (item.abiertoPreviamente === 'si') {
+              lineas.push(`⚠️ *Inspección interna:* El equipo presentaba signos de apertura o reparación previa${item.detalleAbiertoPreviamente ? ` (${item.detalleAbiertoPreviamente})` : ''}.`);
+          }
           if (clausula) {
               lineas.push(`━━━━━━━━━━━━━━━━━━`);
               lineas.push(clausula);
@@ -1370,6 +1381,27 @@
           doc.text(obsLines, 19, y + 8.5);
           y += obsH + 12;
 
+          if (item.origen === 'cliente' && item.reparadoAntesIngreso) {
+              const txtPrev = item.reparadoAntesIngreso === 'si'
+                  ? `SI — ${item.detalleReparadoIngreso || 'El cliente informó reparación o apertura previa.'}`
+                  : item.reparadoAntesIngreso === 'no_sabe'
+                    ? 'EL CLIENTE NO SABE si el equipo fue intervenido anteriormente.'
+                    : 'NO — El cliente declara que el equipo no tuvo reparaciones previas.';
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(8);
+              doc.setTextColor(100, 116, 139);
+              doc.text('ANTECEDENTES DE REPARACIÓN PREVIA (DECLARADO AL INGRESO)', 15, y);
+              const prevLines = doc.splitTextToSize(txtPrev, 172);
+              const prevH = Math.max(10, prevLines.length * 4.8 + 5);
+              doc.setFillColor(item.reparadoAntesIngreso === 'si' ? 255 : 248, item.reparadoAntesIngreso === 'si' ? 251 : 250, item.reparadoAntesIngreso === 'si' ? 235 : 252);
+              doc.setDrawColor(item.reparadoAntesIngreso === 'si' ? 252 : 226, item.reparadoAntesIngreso === 'si' ? 211 : 232, item.reparadoAntesIngreso === 'si' ? 77 : 240);
+              doc.roundedRect(15, y + 2.5, 180, prevH, 2.5, 2.5, 'FD');
+              doc.setFont('helvetica', item.reparadoAntesIngreso === 'si' ? 'bold' : 'normal');
+              doc.setFontSize(9);
+              doc.setTextColor(item.reparadoAntesIngreso === 'si' ? 146 : 51, item.reparadoAntesIngreso === 'si' ? 64 : 65, item.reparadoAntesIngreso === 'si' ? 14 : 85);
+              doc.text(prevLines, 19, y + 8);
+              y += prevH + 9;
+          }
           if (item.origen === 'cliente') {
               doc.setFillColor(245, 243, 255);
               doc.setDrawColor(196, 181, 253);
@@ -1567,6 +1599,26 @@
               y += obsH + 10;
           }
 
+          if (item.abiertoPreviamente) {
+              const fueAbierto = item.abiertoPreviamente === 'si';
+              const txtHallazgo = fueAbierto
+                  ? `ATENCIÓN: Al abrir el equipo se detectaron signos de apertura o manipulación previa${item.detalleAbiertoPreviamente ? ` (${item.detalleAbiertoPreviamente})` : ''}.`
+                  : 'Al abrir el equipo no se observaron signos de apertura ni manipulación técnica previa.';
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(8);
+              doc.setTextColor(fueAbierto ? 180 : 100, fueAbierto ? 83 : 116, fueAbierto ? 9 : 139);
+              doc.text('INFORME TÉCNICO DE APERTURA INTERNA', 15, y);
+              const halLines = doc.splitTextToSize(txtHallazgo, 172);
+              const halH = Math.max(10, halLines.length * 4.8 + 5);
+              doc.setFillColor(fueAbierto ? 255 : 248, fueAbierto ? 251 : 250, fueAbierto ? 235 : 252);
+              doc.setDrawColor(fueAbierto ? 251 : 226, fueAbierto ? 191 : 232, fueAbierto ? 36 : 240);
+              doc.roundedRect(15, y + 2.5, 180, halH, 2.5, 2.5, 'FD');
+              doc.setFont('helvetica', fueAbierto ? 'bold' : 'normal');
+              doc.setFontSize(8.8);
+              doc.setTextColor(fueAbierto ? 146 : 51, fueAbierto ? 64 : 65, fueAbierto ? 14 : 85);
+              doc.text(halLines, 19, y + 8);
+              y += halH + 8;
+          }
           // IMPORTE TOTAL
           doc.setFillColor(236, 253, 245);
           doc.setDrawColor(110, 231, 183);
@@ -1661,6 +1713,7 @@
       const procesarFinalizacionReparacion = (e) => {
           e.preventDefault();
           if (!nuevaReparacionFinalizada.idEquipoTaller || !nuevaReparacionFinalizada.montoCobrado) return alert('Elegí el equipo y monto.');
+          if (!nuevaReparacionFinalizada.abiertoPreviamente) return alert('Indicá si al abrirlo el equipo ya había sido reparado/manipulado anteriormente.');
           const montoFin = parseFloat(nuevaReparacionFinalizada.montoCobrado);
           const equipo = db.taller.find(t => t.id === parseInt(nuevaReparacionFinalizada.idEquipoTaller));
           let stockAc = [...(db.stock || [])];
@@ -1709,6 +1762,8 @@
               id: Date.now(), fechaTimestamp: Date.now(), fecha: new Date().toLocaleDateString(), equipoOriginal: equipo, 
               repuestoUsado: nomRep, repuestoProveedor: provRep, costoRepuestoUSD: costoRepUSD, repuestosDetalle,
               diasGarantia: diasG, historialGarantia: [],
+              abiertoPreviamente: nuevaReparacionFinalizada.abiertoPreviamente,
+              detalleAbiertoPreviamente: nuevaReparacionFinalizada.abiertoPreviamente === 'si' ? (nuevaReparacionFinalizada.detalleAbiertoPreviamente || '').trim() : '',
               montoCobradoOriginal: montoFin, monedaCobroOriginal: nuevaReparacionFinalizada.monedaCobro,
               montoCobrado: mUSD, monedaCobro: 'USD', montoAdeudadoRestante: mUSD, 
               estadoCobro: equipo.origen === 'cliente' ? 'pendiente' : 'enviado_cobrar', metodosPago: [], detallePagos: []
@@ -1733,7 +1788,7 @@
               log = generarLog('Finalizó Reparación Cliente', `Entregó ${equipo.modelo} a ${equipo.clienteNombre} (${diasG}d gtía). Queda Pendiente.`, regFin);
           }
           guardarEnNube({ ...db, ...dbUpd, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '' });
+          setNuevaReparacionFinalizada({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '', abiertoPreviamente: '', detalleAbiertoPreviamente: '' });
       };
 
       const cobrarReparacionClienteParcial = (e, item) => {
@@ -3059,7 +3114,26 @@
                             </div>
                             <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Estado Visual / Observaciones</label><textarea required rows="2" placeholder="(Ej: Pantalla rota)" value={nuevaReparacion.estadoVisual} onChange={e => setNuevaReparacion({...nuevaReparacion, estadoVisual: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs resize-none"></textarea></div>
                             <div><label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Falla Declarada</label><input type="text" required placeholder="¿Qué hay que hacerle?" value={nuevaReparacion.falla} onChange={e => setNuevaReparacion({...nuevaReparacion, falla: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white text-xs" /></div>
-                            {nuevaReparacion.origen === 'cliente' && (
+                          {nuevaReparacion.origen === 'cliente' && (
+                                <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 space-y-2">
+                                    <label className="text-[10px] font-bold text-amber-400 uppercase block">¿Fue reparado o abierto anteriormente?</label>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        {[
+                                            { val: 'no', lbl: 'No' },
+                                            { val: 'si', lbl: 'Sí, ya fue' },
+                                            { val: 'no_sabe', lbl: 'No sabe' }
+                                        ].map(op => (
+                                            <button key={op.val} type="button" onClick={() => setNuevaReparacion({...nuevaReparacion, reparadoAntesIngreso: op.val, detalleReparadoIngreso: op.val === 'si' ? nuevaReparacion.detalleReparadoIngreso : ''})} className={`py-1.5 rounded-lg text-[11px] font-bold border transition ${nuevaReparacion.reparadoAntesIngreso === op.val ? (op.val === 'si' ? 'bg-amber-600 text-white border-amber-400' : 'bg-cyan-600 text-white border-cyan-400') : 'bg-slate-950 text-slate-400 border-slate-700 hover:text-white'}`}>
+                                                {op.lbl}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {nuevaReparacion.reparadoAntesIngreso === 'si' && (
+                                        <input type="text" placeholder="¿Qué se le hizo antes? (Ej: Cambio de módulo / batería)" value={nuevaReparacion.detalleReparadoIngreso || ''} onChange={e => setNuevaReparacion({...nuevaReparacion, detalleReparadoIngreso: e.target.value})} className="w-full bg-slate-950 border border-amber-500/50 rounded-lg px-2.5 py-1.5 text-white text-xs fade-in" />
+                                    )}
+                                </div>
+                            )}  
+                          {nuevaReparacion.origen === 'cliente' && (
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Presupuesto Estimado</label>
                                     <div className="flex gap-2">
@@ -3110,6 +3184,15 @@
                                             <div className="space-y-1.5 bg-slate-950 p-2.5 rounded-lg border border-slate-800/50 text-xs">
                                                 <p className="text-slate-300"><strong className="text-slate-500 uppercase text-[9px] mr-1">Falla:</strong> {item.falla}</p>
                                                 <p className="text-slate-400"><strong className="text-slate-500 uppercase text-[9px] mr-1">Estado:</strong> {item.estadoVisual}</p>
+                                              {item.origen === 'cliente' && item.reparadoAntesIngreso === 'si' && (
+                                                    <p className="text-amber-300 bg-amber-950/50 border border-amber-500/40 rounded px-2 py-1 text-[11px]">
+                                                      <i className="fa-solid fa-triangle-exclamation text-amber-400 mr-1"></i>
+                                                      <strong>Reparación previa declarada:</strong> {item.detalleReparadoIngreso || 'El cliente informó intervención anterior.'}
+                                                    </p>
+                                                )}
+                                                {item.origen === 'cliente' && item.reparadoAntesIngreso === 'no_sabe' && (
+                                                    <p className="text-slate-400 text-[11px]"><i className="fa-solid fa-circle-question text-slate-500 mr-1"></i>Antecedentes: Cliente no sabe si fue abierto antes.</p>
+                                                )}
                                                 {item.origen === 'cliente' && (
                                                     <div className="pt-1.5 border-t border-slate-800">
                                                       {item.presupuesto ? <p className="text-emerald-400 font-mono text-xs">Presupuesto: {formatDinero(convertirParaMostrar(item.presupuesto, item.presupuestoMoneda || 'ARS'))}</p> : <p className="text-amber-400 font-mono text-xs">Presupuesto: A confirmar</p>}
@@ -3181,7 +3264,9 @@
                                     idEquipoTaller: idTaller,
                                     montoCobrado: montoAuto,
                                     monedaCobro: monedaAuto,
-                                    diasGarantia: autoGarantia
+                                    diasGarantia: autoGarantia,
+                                    abiertoPreviamente: equipo?.reparadoAntesIngreso === 'si' ? 'si' : '',
+                                    detalleAbiertoPreviamente: equipo?.detalleReparadoIngreso || ''
                                 });
                             }} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold focus:outline-none focus:border-cyan-500">
                                 <option value="">-- Seleccionar Equipo --</option>
@@ -3368,6 +3453,25 @@
                         </div>
                       )}
 
+                      {/* VERIFICACIÓN TÉCNICA INTERNA AL FINALIZAR (MINORISTA Y GREMIO) */}
+                      <div className={`p-3 rounded-xl border space-y-2 transition ${nuevaReparacionFinalizada.abiertoPreviamente === 'si' ? 'bg-amber-950/30 border-amber-500/60' : nuevaReparacionFinalizada.abiertoPreviamente === 'no' ? 'bg-emerald-950/20 border-emerald-500/40' : 'bg-slate-900 border-slate-700'}`}>
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                          <label className="text-[10px] font-black text-amber-300 uppercase tracking-wider">
+                            <i className="fa-solid fa-magnifying-glass-plus mr-1.5"></i>Al abrirlo: ¿Notaste que ya fue abierto, manipulado o reparado antes? *
+                          </label>
+                          <div className="flex gap-2 w-full sm:w-auto">
+                            <button type="button" onClick={() => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, abiertoPreviamente: 'no', detalleAbiertoPreviamente: ''})} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-bold border transition ${nuevaReparacionFinalizada.abiertoPreviamente === 'no' ? 'bg-emerald-600 text-white border-emerald-400 shadow' : 'bg-slate-950 text-slate-400 border-slate-700 hover:text-white'}`}>
+                              ✅ No, intacto
+                            </button>
+                            <button type="button" onClick={() => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, abiertoPreviamente: 'si'})} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-bold border transition ${nuevaReparacionFinalizada.abiertoPreviamente === 'si' ? 'bg-amber-600 text-white border-amber-400 shadow' : 'bg-slate-950 text-slate-400 border-slate-700 hover:text-white'}`}>
+                              ⚠️ Sí, ya fue abierto / manipulado
+                            </button>
+                          </div>
+                        </div>
+                        {nuevaReparacionFinalizada.abiertoPreviamente === 'si' && (
+                          <input type="text" placeholder="Observación interna (Opcional — Ej: Faltaban tornillos / sellos rotos / pantalla o batería ya cambiada)" value={nuevaReparacionFinalizada.detalleAbiertoPreviamente || ''} onChange={e => setNuevaReparacionFinalizada({...nuevaReparacionFinalizada, detalleAbiertoPreviamente: e.target.value})} className="w-full bg-slate-950 border border-amber-500/50 rounded-lg px-3 py-1.5 text-white text-xs fade-in focus:outline-none" />
+                        )}
+                      </div>
                       <button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl transition text-xs shadow-md">Finalizar Reparación</button>
                     </form>
                   </div>
@@ -3459,6 +3563,12 @@
                                 </div>
                                 <p className="text-xs text-slate-400 mt-1">Reparación: <strong className="text-slate-300">{item.equipoOriginal.falla}</strong></p>
                                 {item.repuestoUsado && <p className="text-[11px] text-amber-400 mt-0.5"><i className="fa-solid fa-box mr-1"></i> Repuesto: {item.repuestoUsado} {item.repuestoProveedor && `[Prov: ${item.repuestoProveedor}]`} (Costo: {formatDinero(convertirParaMostrar(item.costoRepuestoUSD, 'USD', item.monedaCobroOriginal), item.monedaCobroOriginal)})</p>}
+                                {item.abiertoPreviamente === 'si' && (
+                                  <p className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-500/30 rounded px-2 py-0.5 mt-1 inline-block">
+                                    <i className="fa-solid fa-triangle-exclamation text-amber-400 mr-1"></i>
+                                    <strong>Previamente abierto/manipulado:</strong> {item.detalleAbiertoPreviamente || 'Detectado al abrir el equipo.'}
+                                  </p>
+                                )}
                                 <p className="text-[11px] text-slate-500 mt-0.5">Cliente: {item.equipoOriginal.origen === 'cliente' ? item.equipoOriginal.clienteNombre : item.equipoOriginal.gremio} • Fin: {item.fecha}</p>
                                 
                                 <div className="mt-2 flex gap-1.5 items-center flex-wrap">
@@ -3720,6 +3830,12 @@
                                 <div>
                                   <span className="text-[9px] font-bold text-slate-500 uppercase block">Estado Visual cuando ingresó al taller:</span>
                                   <span className="text-slate-300">{eq.estadoVisual || 'Sin observaciones'}</span>
+                                  {(item.abiertoPreviamente === 'si' || eq.reparadoAntesIngreso === 'si') && (
+                                    <p className="text-[11px] text-amber-300 font-bold mt-1">
+                                      <i className="fa-solid fa-triangle-exclamation text-amber-400 mr-1"></i>
+                                      Equipo ya abierto/manipulado previamente{item.detalleAbiertoPreviamente || eq.detalleReparadoIngreso ? `: ${item.detalleAbiertoPreviamente || eq.detalleReparadoIngreso}` : ''}
+                                    </p>
+                                  )}
                                 </div>
                                 <div>
                                   <span className="text-[9px] font-bold text-slate-500 uppercase block">Repuesto utilizado y Proveedor:</span>
@@ -6241,6 +6357,8 @@
                   estadoVisual: editandoTaller.estadoVisual.trim(),
                   presupuesto: editandoTaller.origen === 'cliente' ? (parseFloat(editandoTaller.presupuesto) || null) : null,
                   presupuestoMoneda: editandoTaller.presupuestoMoneda || 'ARS',
+                  reparadoAntesIngreso: editandoTaller.origen === 'cliente' ? (editandoTaller.reparadoAntesIngreso || 'no') : '',
+                  detalleReparadoIngreso: editandoTaller.origen === 'cliente' && editandoTaller.reparadoAntesIngreso === 'si' ? (editandoTaller.detalleReparadoIngreso || '').trim() : '',
                   estadoTaller: editandoTaller.estadoTaller || 'En revisión'
                 } : t);
                 const log = generarLog('Editó Equipo en Taller', `Actualizó datos de ${editandoTaller.modelo} (IMEI: ${editandoTaller.imei}).`, editandoTaller);
@@ -6287,6 +6405,19 @@
                     <label className="text-slate-400 font-bold mb-1 block">Estado Visual / Observaciones</label>
                     <textarea rows="2" required value={editandoTaller.estadoVisual} onChange={e => setEditandoTaller({...editandoTaller, estadoVisual: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white resize-none"></textarea>
                   </div>
+                  {editandoTaller.origen === 'cliente' && (
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-2">
+                      <label className="text-amber-400 font-bold block">¿Fue reparado o abierto antes?</label>
+                      <select value={editandoTaller.reparadoAntesIngreso || 'no'} onChange={e => setEditandoTaller({...editandoTaller, reparadoAntesIngreso: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-bold">
+                        <option value="no">No</option>
+                        <option value="si">Sí, ya había sido reparado / abierto</option>
+                        <option value="no_sabe">Cliente no sabe</option>
+                      </select>
+                      {editandoTaller.reparadoAntesIngreso === 'si' && (
+                        <input type="text" placeholder="Detalle de reparación previa..." value={editandoTaller.detalleReparadoIngreso || ''} onChange={e => setEditandoTaller({...editandoTaller, detalleReparadoIngreso: e.target.value})} className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-2.5 py-1.5 text-white" />
+                      )}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
