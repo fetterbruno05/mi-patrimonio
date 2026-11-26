@@ -179,7 +179,9 @@
 
       const [nuevaVenta, setNuevaVenta] = useState({ modelo: '', almacenamiento: '128GB', color: '', bateria: '100%', imei: '', precioVenta: '', precioVentaMoneda: 'USD', comisionPorUnidad: '20000', moneda: 'ARS', vendioCargador: false });
       const [filtroVentas, setFiltroVentas] = useState('');
-
+      const [desgloseVentaFecha, setDesgloseVentaFecha] = useState(null);
+      const [editandoVenta, setEditandoVenta] = useState(null);
+      
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS', reparadoAntesIngreso: 'no', detalleReparadoIngreso: '' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
       const [nuevaReparacionFinalizada, setNuevaReparacionFinalizada] = useState({ idEquipoTaller: '', montoCobrado: '', monedaCobro: 'ARS', repuestoId: '', repuestosStock: [], diasGarantia: '90', mostrarExterno: false, extNombre: '', extCosto: '', extMoneda: 'ARS', extProveedor: '', abiertoPreviamente: '', detalleAbiertoPreviamente: '' });
@@ -262,6 +264,7 @@
                 historiaGremios: Array.isArray(data.payload.historiaGremios) ? data.payload.historiaGremios : ['iConnecture'],
                 historiaMetodosPago: Array.isArray(data.payload.historiaMetodosPago) ? data.payload.historiaMetodosPago : ['Efectivo', 'Transferencia'],
                 historiaProveedores: Array.isArray(data.payload.historiaProveedores) ? data.payload.historiaProveedores : ['Proveedor Principal'],
+                bonosVentasAcreditados: data.payload.bonosVentasAcreditados && typeof data.payload.bonosVentasAcreditados === 'object' ? data.payload.bonosVentasAcreditados : {},
                 actividad: Array.isArray(data.payload.actividad) ? data.payload.actividad.filter(Boolean) : []
               };
               const ahoraTs = Date.now();
@@ -1127,13 +1130,98 @@
         guardarEnNube({ ...db, stock: stockActualizado, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
+      const calcularBonusMesARS = (cantEquipos) => {
+          if (cantEquipos >= 90) return 300000;
+          if (cantEquipos >= 60) return 200000;
+          if (cantEquipos >= 30) return 100000;
+          return 0;
+      };
+
+      const obtenerMesKeyVenta = (item) => {
+          let d = null;
+          if (item.fechaTimestamp) d = new Date(item.fechaTimestamp);
+          else if (item.fecha) {
+              const p = String(item.fecha).split('/').map(Number);
+              if (p.length === 3) {
+                  const anio = p[2] < 100 ? 2000 + p[2] : p[2];
+                  d = new Date(anio, p[1] - 1, p[0]);
+              }
+          }
+          if (!d || isNaN(d.getTime())) d = new Date();
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      };
+
+      const obtenerCantCargadoresVenta = (item) => {
+          if (item.cantidadCargadores !== undefined && item.cantidadCargadores !== null && item.cantidadCargadores !== '') {
+              return Math.max(0, parseInt(item.cantidadCargadores) || 0);
+          }
+          return item.vendioCargador ? 1 : 0;
+      };
+
+      const aplicarBonusVentasSiCorresponde = (mesKey, ventasLista, deudasCobrarLista, bonosMapOriginal) => {
+          const bonosAc = { ...(bonosMapOriginal || {}) };
+          const deudasAc = [...(deudasCobrarLista || [])];
+          const eqMes = (ventasLista || []).reduce((acc, v) => obtenerMesKeyVenta(v) === mesKey ? acc + (parseInt(v.cantidad) || 1) : acc, 0);
+          const bonusObjetivo = calcularBonusMesARS(eqMes);
+          const yaAcreditado = parseFloat(bonosAc[mesKey]) || 0;
+          const diffARS = bonusObjetivo - yaAcreditado;
+
+          if (diffARS > 0) {
+              const deudor = "Local / Negocio (Ventas)";
+              const motivoBonus = "Bonus Mensual por Metas de Ventas";
+              const fechaHoy = new Date().toLocaleDateString('es-AR');
+              const metaLbl = bonusObjetivo >= 300000 ? '90' : bonusObjetivo >= 200000 ? '60' : '30';
+              const movBonus = {
+                  id: Date.now() + 9,
+                  fecha: fechaHoy,
+                  titulo: `Bonus Meta ${metaLbl} Ventas (${mesKey})`,
+                  detalle: `Alcanzó ${eqMes} equipos en el mes (Total bonus mes: $${bonusObjetivo.toLocaleString('es-AR')})`,
+                  monto: diffARS,
+                  moneda: 'ARS',
+                  tipo: 'cargo'
+              };
+              const idxB = deudasAc.findIndex(d => d.deudor === deudor && d.motivo === motivoBonus && d.moneda === 'ARS');
+              if (idxB !== -1) {
+                  deudasAc[idxB] = {
+                      ...deudasAc[idxB],
+                      monto: Math.round(parseFloat(deudasAc[idxB].monto) + diffARS),
+                      movimientos: [movBonus, ...(deudasAc[idxB].movimientos || [])]
+                  };
+              } else {
+                  deudasAc.unshift({
+                      id: Date.now() + 8,
+                      fechaTimestamp: Date.now(),
+                      deudor,
+                      motivo: motivoBonus,
+                      monto: Math.round(diffARS),
+                      moneda: 'ARS',
+                      fecha: fechaHoy,
+                      movimientos: [movBonus]
+                  });
+              }
+              bonosAc[mesKey] = bonusObjetivo;
+          }
+
+          return { deudasCobrar: deudasAc, bonosVentasAcreditados: bonosAc, bonusAcreditadoAhoraARS: Math.max(0, diffARS) };
+      };
+
+      const acreditarBonusManualMesActual = () => {
+          const ahoraD = new Date();
+          const mesActualKey = `${ahoraD.getFullYear()}-${String(ahoraD.getMonth() + 1).padStart(2, '0')}`;
+          const res = aplicarBonusVentasSiCorresponde(mesActualKey, db.ventas || [], db.deudasCobrar || [], db.bonosVentasAcreditados || {});
+          if (res.bonusAcreditadoAhoraARS <= 0) return alert('El bonus de este mes ya está acreditado.');
+          const log = generarLog('Acreditó Bonus Ventas', `Sumó $${res.bonusAcreditadoAhoraARS.toLocaleString('es-AR')} ARS por meta de ventas (${mesActualKey}) a Cuentas a Cobrar.`);
+          guardarEnNube({ ...db, deudasCobrar: res.deudasCobrar, bonosVentasAcreditados: res.bonosVentasAcreditados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+      };
+
       const registrarVenta = (e) => {
           e.preventDefault();
           if (!nuevaVenta.modelo.trim()) return alert('Ingresá el modelo del equipo vendido.');
           if (nuevaVenta.imei.length !== 15) return alert('El IMEI debe tener exactamente 15 números.');
           const comiUnit = parseFloat(nuevaVenta.comisionPorUnidad) || 0;
           const vendioCarg = !!nuevaVenta.vendioCargador;
-          const comiCargUSD = vendioCarg ? 5 : 0;
+          const cantCarg = vendioCarg ? 1 : 0;
+          const comiCargUSD = cantCarg * 5;
           if (comiUnit <= 0 && !vendioCarg) return alert('La comisión debe ser mayor a cero.');
 
           const fechaHoy = new Date().toLocaleDateString('es-AR');
@@ -1158,6 +1246,7 @@
               totalComision: comiUnit,
               moneda: monVenta,
               vendioCargador: vendioCarg,
+              cantidadCargadores: cantCarg,
               comisionCargadorUSD: comiCargUSD
           };
 
@@ -1190,29 +1279,166 @@
           }
 
           // 2. Comisión de Cargador (FIJADA EN U$D 5 USD)
-          if (vendioCarg) {
+          if (cantCarg > 0) {
               const motivoCarg = "Comisiones de Cargadores (Fijado en USD)";
               const movCarg = {
                   id: tsNow + 4,
                   fecha: fechaHoy,
                   titulo: `Cargador (${regVenta.modelo})`,
                   detalle: `IMEI equipo: ${regVenta.imei} • Comisión fija en dólares`,
-                  monto: 5,
+                  monto: comiCargUSD,
                   moneda: 'USD',
                   tipo: 'cargo'
               };
               const idxCarg = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoCarg && d.moneda === 'USD');
               if (idxCarg !== -1) {
-                  deudasCobrarAc[idxCarg].monto = redondear(parseFloat(deudasCobrarAc[idxCarg].monto) + 5);
+                  deudasCobrarAc[idxCarg].monto = redondear(parseFloat(deudasCobrarAc[idxCarg].monto) + comiCargUSD);
                   deudasCobrarAc[idxCarg].movimientos = [movCarg, ...(deudasCobrarAc[idxCarg].movimientos || [])];
               } else {
-                  deudasCobrarAc.unshift({ id: tsNow + 3, fechaTimestamp: tsNow, deudor, motivo: motivoCarg, monto: 5, moneda: 'USD', fecha: fechaHoy, movimientos: [movCarg] });
+                  deudasCobrarAc.unshift({ id: tsNow + 3, fechaTimestamp: tsNow, deudor, motivo: motivoCarg, monto: comiCargUSD, moneda: 'USD', fecha: fechaHoy, movimientos: [movCarg] });
               }
           }
 
-          const log = generarLog('Registró Venta', `Vendió ${regVenta.modelo} ${regVenta.almacenamiento} (IMEI: ${regVenta.imei}). Comisión: ${comiUnit} ${monVenta}${vendioCarg ? ' + U$D 5 (Cargador)' : ''}.`, regVenta);
-          guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          // 3. Verificar si esta venta destrabó un escalón de Bonus Mensual (30 / 60 / 90)
+          const mesKey = obtenerMesKeyVenta(regVenta);
+          const resBonus = aplicarBonusVentasSiCorresponde(mesKey, ventasAc, deudasCobrarAc, db.bonosVentasAcreditados);
+
+          const txtBonus = resBonus.bonusAcreditadoAhoraARS > 0 ? ` + BONUS +$${resBonus.bonusAcreditadoAhoraARS.toLocaleString('es-AR')} ARS` : '';
+          const log = generarLog('Registró Venta', `Vendió ${regVenta.modelo} ${regVenta.almacenamiento} (IMEI: ${regVenta.imei}). Comisión: ${comiUnit} ${monVenta}${vendioCarg ? ' + U$D 5 (Cargador)' : ''}${txtBonus}.`, regVenta);
+          guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: resBonus.deudasCobrar, bonosVentasAcreditados: resBonus.bonosVentasAcreditados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           setNuevaVenta({ modelo: '', almacenamiento: '128GB', color: '', bateria: '100%', imei: '', precioVenta: '', precioVentaMoneda: 'USD', comisionPorUnidad: nuevaVenta.comisionPorUnidad, moneda: monVenta, vendioCargador: false });
+      };
+
+      const guardarEdicionVenta = (e) => {
+          e.preventDefault();
+          if (!editandoVenta) return;
+          if (editandoVenta.imei && editandoVenta.imei.trim().length > 0 && editandoVenta.imei.trim().length !== 15) {
+              return alert('Si ingresás IMEI debe tener exactamente 15 números.');
+          }
+          if (!window.confirm('¿Confirmás guardar los cambios en esta venta?')) return;
+
+          const vOrig = (db.ventas || []).find(v => v.id === editandoVenta.id);
+          if (!vOrig) return setEditandoVenta(null);
+
+          const esGrupal = !vOrig.modelo && !(editandoVenta.modelo || '').trim();
+          const nvaCant = esGrupal ? Math.max(1, parseInt(editandoVenta.cantidad) || 1) : 1;
+          const nvaComiUnit = parseFloat(editandoVenta.comisionUnitaria) || 0;
+          const nvoTotalComi = nvaCant * nvaComiUnit;
+          const nvaMon = editandoVenta.moneda || 'ARS';
+          const nvoCarg = Math.max(0, parseInt(editandoVenta.cantidadCargadores) || 0);
+          const nvoComiCargUSD = nvoCarg * 5;
+
+          const ventaActualizada = {
+              ...vOrig,
+              cantidad: nvaCant,
+              modelo: (editandoVenta.modelo || '').trim(),
+              almacenamiento: (editandoVenta.almacenamiento || '').trim(),
+              color: (editandoVenta.color || '').trim(),
+              bateria: (editandoVenta.bateria || '').trim(),
+              imei: (editandoVenta.imei || '').trim(),
+              precioVenta: parseFloat(editandoVenta.precioVenta) || 0,
+              precioVentaMoneda: editandoVenta.precioVentaMoneda || 'USD',
+              comisionUnitaria: nvaComiUnit,
+              totalComision: nvoTotalComi,
+              moneda: nvaMon,
+              vendioCargador: nvoCarg > 0,
+              cantidadCargadores: nvoCarg,
+              comisionCargadorUSD: nvoComiCargUSD
+          };
+
+          const ventasAc = (db.ventas || []).map(v => v.id === vOrig.id ? ventaActualizada : v);
+          let deudasCobrarAc = [...(db.deudasCobrar || [])];
+          let bonosAc = { ...(db.bonosVentasAcreditados || {}) };
+
+          if (editandoVenta.ajustarCobrar) {
+              const deudor = "Local / Negocio (Ventas)";
+              const fechaHoy = new Date().toLocaleDateString('es-AR');
+
+              // 1. Ajustar diferencia en comisión del equipo
+              const antTotalComi = parseFloat(vOrig.totalComision) || 0;
+              const antMon = vOrig.moneda || 'ARS';
+              const motivoEq = "Comisiones de Venta de Equipos";
+              const tituloEq = ventaActualizada.modelo ? `${ventaActualizada.modelo} ${ventaActualizada.almacenamiento}`.trim() : `Ventas del ${vOrig.fecha}`;
+
+              if (nvaMon === antMon) {
+                  const diffComi = nvoTotalComi - antTotalComi;
+                  if (Math.abs(diffComi) > 0.01) {
+                      const idxEq = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoEq && d.moneda === nvaMon);
+                      const movAjuste = {
+                          id: Date.now() + 2,
+                          fecha: fechaHoy,
+                          titulo: `Ajuste venta: ${tituloEq}`,
+                          detalle: `Editado de ${antTotalComi} a ${nvoTotalComi} ${nvaMon}`,
+                          monto: Math.abs(diffComi),
+                          moneda: nvaMon,
+                          tipo: diffComi > 0 ? 'cargo' : 'abono'
+                      };
+                      if (idxEq !== -1) {
+                          const nvoSaldo = Math.max(0, parseFloat(deudasCobrarAc[idxEq].monto) + diffComi);
+                          deudasCobrarAc[idxEq] = {
+                              ...deudasCobrarAc[idxEq],
+                              monto: nvaMon === 'ARS' ? Math.round(nvoSaldo) : redondear(nvoSaldo),
+                              movimientos: [movAjuste, ...(deudasCobrarAc[idxEq].movimientos || [])]
+                          };
+                      } else if (diffComi > 0) {
+                          deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo: motivoEq, monto: nvaMon === 'ARS' ? Math.round(diffComi) : redondear(diffComi), moneda: nvaMon, fecha: fechaHoy, movimientos: [movAjuste] });
+                      }
+                  }
+              } else {
+                  // Cambió de moneda: descuenta de la vieja y suma a la nueva
+                  const idxAnt = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoEq && d.moneda === antMon);
+                  if (idxAnt !== -1 && antTotalComi > 0) {
+                      const nvoSaldoAnt = Math.max(0, parseFloat(deudasCobrarAc[idxAnt].monto) - antTotalComi);
+                      deudasCobrarAc[idxAnt] = { ...deudasCobrarAc[idxAnt], monto: antMon === 'ARS' ? Math.round(nvoSaldoAnt) : redondear(nvoSaldoAnt) };
+                  }
+                  if (nvoTotalComi > 0) {
+                      const idxNva = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoEq && d.moneda === nvaMon);
+                      const movNva = { id: Date.now() + 2, fecha: fechaHoy, titulo: tituloEq, detalle: `Cambio moneda venta (${antMon} → ${nvaMon})`, monto: nvoTotalComi, moneda: nvaMon, tipo: 'cargo' };
+                      if (idxNva !== -1) {
+                          deudasCobrarAc[idxNva] = { ...deudasCobrarAc[idxNva], monto: nvaMon === 'ARS' ? Math.round(parseFloat(deudasCobrarAc[idxNva].monto) + nvoTotalComi) : redondear(parseFloat(deudasCobrarAc[idxNva].monto) + nvoTotalComi), movimientos: [movNva, ...(deudasCobrarAc[idxNva].movimientos || [])] };
+                      } else {
+                          deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo: motivoEq, monto: nvaMon === 'ARS' ? Math.round(nvoTotalComi) : redondear(nvoTotalComi), moneda: nvaMon, fecha: fechaHoy, movimientos: [movNva] });
+                      }
+                  }
+              }
+
+              // 2. Ajustar diferencia de Cargadores (+5 USD fijos c/u)
+              const antCarg = obtenerCantCargadoresVenta(vOrig);
+              const diffCarg = nvoCarg - antCarg;
+              const diffCargUSD = diffCarg * 5;
+              if (diffCarg !== 0) {
+                  const motivoCarg = "Comisiones de Cargadores (Fijado en USD)";
+                  const idxCarg = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoCarg && d.moneda === 'USD');
+                  const movCarg = {
+                      id: Date.now() + 4,
+                      fecha: fechaHoy,
+                      titulo: diffCarg > 0 ? `${diffCarg}x Cargador (${tituloEq})` : `Ajuste cargador quitado (${tituloEq})`,
+                      detalle: `Edición de venta (${vOrig.fecha}) • U$D 5 fijos c/u`,
+                      monto: Math.abs(diffCargUSD),
+                      moneda: 'USD',
+                      tipo: diffCarg > 0 ? 'cargo' : 'abono'
+                  };
+                  if (idxCarg !== -1) {
+                      const nvoSaldoCarg = Math.max(0, redondear(parseFloat(deudasCobrarAc[idxCarg].monto) + diffCargUSD));
+                      deudasCobrarAc[idxCarg] = {
+                          ...deudasCobrarAc[idxCarg],
+                          monto: nvoSaldoCarg,
+                          movimientos: [movCarg, ...(deudasCobrarAc[idxCarg].movimientos || [])]
+                      };
+                  } else if (diffCargUSD > 0) {
+                      deudasCobrarAc.unshift({ id: Date.now() + 3, fechaTimestamp: Date.now(), deudor, motivo: motivoCarg, monto: diffCargUSD, moneda: 'USD', fecha: fechaHoy, movimientos: [movCarg] });
+                  }
+              }
+
+              // 3. Chequear bonus mensual tras la edición
+              const resBonus = aplicarBonusVentasSiCorresponde(obtenerMesKeyVenta(ventaActualizada), ventasAc, deudasCobrarAc, bonosAc);
+              deudasCobrarAc = resBonus.deudasCobrar;
+              bonosAc = resBonus.bonosVentasAcreditados;
+          }
+
+          const log = generarLog('Editó Venta', `Editó venta (${ventaActualizada.modelo || ventaActualizada.fecha}): ${nvaCant} eq., comisión ${nvoTotalComi} ${nvaMon}, ${nvoCarg} cargador(es).`, ventaActualizada);
+          guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, bonosVentasAcreditados: bonosAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          setEditandoVenta(null);
       };
 
       const eliminarRegistroVenta = (itemVenta) => {
@@ -2310,15 +2536,23 @@
               return 0;
           };
 
-          // 1. Comisiones por Ventas de Equipos
+          // 1. Comisiones por Ventas de Equipos + Cargadores + Bonus Mensuales (30/60/90)
           let ganVentasUSD = 0;
           let cantEquiposVendidos = 0;
+          const eqPorMesPeriodo = {};
           (db.ventas || []).forEach(v => {
               const ts = obtenerTs(v);
               if (ts >= desdeTs && ts <= hastaTs) {
-                  ganVentasUSD += aUSDBase(v.totalComision, v.moneda, db.cotizacionDolar) + (parseFloat(v.comisionCargadorUSD) || 0);
-                  cantEquiposVendidos += (parseInt(v.cantidad) || 0);
+                  const comiCargUSD = obtenerCantCargadoresVenta(v) * 5;
+                  ganVentasUSD += aUSDBase(v.totalComision, v.moneda, db.cotizacionDolar) + comiCargUSD;
+                  const cantV = parseInt(v.cantidad) || 1;
+                  cantEquiposVendidos += cantV;
+                  const mKey = obtenerMesKeyVenta(v);
+                  eqPorMesPeriodo[mKey] = (eqPorMesPeriodo[mKey] || 0) + cantV;
               }
+          });
+          Object.values(eqPorMesPeriodo).forEach(cantMes => {
+              ganVentasUSD += (calcularBonusMesARS(cantMes) / db.cotizacionDolar);
           });
 
           // 2. Ganancia Limpia de Taller (Particular 50% vs Gremio 100% + Recupero de Repuestos + Medios de Pago)
@@ -2438,18 +2672,29 @@
       const dayOfWeek = now.getDay() || 7;
       const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1).getTime();
 
-      let tVtasHistUSD = 0; let tVtasMesUSD = 0; let tVtasSemUSD = 0; let tEqVend = 0; let tCargVend = 0;
+      const mesActualKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      let tVtasHistUSD = 0; let tVtasMesUSD = 0; let tVtasSemUSD = 0; let tEqVend = 0; let tEqMesActual = 0; let tCargVend = 0;
+      const eqPorMesGlobal = {};
       (db.ventas || []).forEach(item => {
+          const cantV = parseInt(item.cantidad) || 1;
+          const cargV = obtenerCantCargadoresVenta(item);
           const baseUSD = item.moneda === 'USD' ? parseFloat(item.totalComision) : parseFloat(item.totalComision) / db.cotizacionDolar;
-          const usd = baseUSD + (parseFloat(item.comisionCargadorUSD) || 0);
+          const usd = baseUSD + (cargV * 5);
           tVtasHistUSD += usd;
-          tEqVend += parseInt(item.cantidad) || 1;
-          if (item.vendioCargador) tCargVend += 1;
+          tEqVend += cantV;
+          tCargVend += cargV;
+          const mKey = obtenerMesKeyVenta(item);
+          eqPorMesGlobal[mKey] = (eqPorMesGlobal[mKey] || 0) + cantV;
           let ts = item.fechaTimestamp;
           if (!ts && item.fecha) { const p = item.fecha.split('/'); if(p.length===3) ts = new Date(p[2], p[1]-1, p[0]).getTime(); }
-          if (ts >= startOfMonth) tVtasMesUSD += usd;
+          if (mKey === mesActualKey) { tVtasMesUSD += usd; tEqMesActual += cantV; }
           if (ts >= startOfWeek) tVtasSemUSD += usd;
       });
+      const bonusMesActualARS = calcularBonusMesARS(tEqMesActual);
+      const bonusMesYaAcreditadoARS = parseFloat((db.bonosVentasAcreditados || {})[mesActualKey]) || 0;
+      const bonusHistARS = Object.values(eqPorMesGlobal).reduce((acc, c) => acc + calcularBonusMesARS(c), 0);
+      tVtasMesUSD += (bonusMesActualARS / db.cotizacionDolar);
+      tVtasHistUSD += (bonusHistARS / db.cotizacionDolar);
       
       const tGanNetRepUSD = (db.reparacionesFin || []).reduce((acc, item) => {
           const adeudado = item.montoAdeudadoRestante !== undefined ? parseFloat(item.montoAdeudadoRestante) : 0;
@@ -3113,11 +3358,65 @@
                     <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
                       <p className="text-[9px] sm:text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-calendar-days mr-1"></i>Este Mes</p>
                       <h2 className="text-base sm:text-2xl font-black text-white truncate">{formatDinero(convertirParaMostrar(tVtasMesUSD, 'USD'))}</h2>
+                      <p className="text-slate-400 text-[9px] font-mono mt-0.5">{tEqMesActual} eq.{bonusMesActualARS > 0 ? ` • +$${(bonusMesActualARS/1000).toFixed(0)}k bonus` : ''}</p>
                     </div>
                     <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
                       <p className="text-[9px] sm:text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-sack-dollar mr-1"></i>Histórico</p>
                       <h2 className="text-base sm:text-2xl font-black text-white truncate">{formatDinero(convertirParaMostrar(tVtasHistUSD, 'USD'))}</h2>
                       <p className="text-slate-400 text-[9px] font-mono mt-0.5">({tEqVend} eq.{tCargVend > 0 ? ` • ${tCargVend} carg.` : ''})</p>
+                    </div>
+                  </div>
+
+                  {/* TRACKER DE BONUS MENSUAL (30 -> $100K | 60 -> $200K | 90 -> $300K) */}
+                  <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4 space-y-3 shadow-lg">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                      <div>
+                        <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <i className="fa-solid fa-trophy text-amber-400"></i> Bonus Mensual por Volumen de Ventas
+                        </h3>
+                        <p className="text-[11px] text-slate-400">
+                          Llevás <strong className="text-white font-mono">{tEqMesActual}</strong> ventas este mes •{' '}
+                          {tEqMesActual < 30
+                            ? <>Te faltan <strong className="text-amber-400">{30 - tEqMesActual}</strong> para desbloquear <strong>$100.000 ARS</strong></>
+                            : tEqMesActual < 60
+                              ? <>Te faltan <strong className="text-amber-400">{60 - tEqMesActual}</strong> para llegar a <strong>$200.000 ARS</strong> (+$100k extra)</>
+                              : tEqMesActual < 90
+                                ? <>Te faltan <strong className="text-amber-400">{90 - tEqMesActual}</strong> para el tope de <strong>$300.000 ARS</strong> (+$100k extra)</>
+                                : <strong className="text-emerald-400">¡Meta máxima alcanzada ($300.000 ARS)!</strong>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`px-3 py-1 rounded-xl text-xs font-mono font-black border ${bonusMesActualARS > 0 ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-400' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
+                          Bonus mes: $ {bonusMesActualARS.toLocaleString('es-AR')} ARS
+                        </span>
+                        {bonusMesActualARS > bonusMesYaAcreditadoARS && (
+                          <button type="button" onClick={acreditarBonusManualMesActual} className="bg-amber-600 hover:bg-amber-500 text-white font-black px-3 py-1.5 rounded-xl text-xs transition shadow-md animate-pulse">
+                            <i className="fa-solid fa-gift mr-1.5"></i>Acreditar +${(bonusMesActualARS - bonusMesYaAcreditadoARS).toLocaleString('es-AR')} a "Por Cobrar"
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="w-full bg-slate-950 rounded-full h-3.5 border border-slate-800 overflow-hidden p-0.5">
+                        <div className="h-full rounded-full bg-gradient-to-r from-amber-500 via-emerald-500 to-teal-400 transition-all duration-500" style={{width: `${Math.min(100, (tEqMesActual / 90) * 100)}%`}}></div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center pt-0.5">
+                        {[
+                          { meta: 30, monto: '$100.000', sub: '1er Escalón' },
+                          { meta: 60, monto: '$200.000', sub: '+$100k extra' },
+                          { meta: 90, monto: '$300.000', sub: '+$100k extra' }
+                        ].map(h => {
+                          const cumplido = tEqMesActual >= h.meta;
+                          return (
+                            <div key={h.meta} className={`rounded-xl p-2 border text-[10px] transition ${cumplido ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
+                              <p className="font-black text-xs">{cumplido ? '✅' : '🎯'} {h.meta} Ventas</p>
+                              <p className={`font-mono font-bold ${cumplido ? 'text-white' : 'text-slate-400'}`}>{h.monto} ARS</p>
+                              <p className="text-[9px] opacity-80">{h.sub}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
 
@@ -3200,54 +3499,135 @@
                       </button>
                     </form>
 
+                    {/* HISTÓRICO AGRUPADO POR DÍA CON DESGLOSE DESPLEGABLE */}
                     <div className="space-y-2.5 pt-2">
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-2">
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Registro Histórico de Ventas ({(db.ventas || []).length})</h4>
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Registro Histórico Agrupado por Día</h4>
                         <input type="text" placeholder="Buscar por modelo, IMEI, color, fecha..." value={filtroVentas} onChange={e => setFiltroVentas(e.target.value)} className="w-full sm:w-64 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-emerald-500" />
                       </div>
                       {(() => {
                         const q = filtroVentas.toLowerCase().trim();
-                        const ventasVisibles = (db.ventas || []).filter(v => !q || (v.modelo || '').toLowerCase().includes(q) || (v.imei || '').includes(q) || (v.color || '').toLowerCase().includes(q) || (v.fecha || '').includes(q) || (q.includes('carg') && v.vendioCargador));
+                        const ventasVisibles = (db.ventas || []).filter(v => !q || (v.modelo || '').toLowerCase().includes(q) || (v.imei || '').includes(q) || (v.color || '').toLowerCase().includes(q) || (v.fecha || '').includes(q) || (q.includes('carg') && obtenerCantCargadoresVenta(v) > 0));
                         if (ventasVisibles.length === 0) return <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Sin registros para mostrar.</p>;
-                        return ventasVisibles.map(item => {
-                          const comiEqUSD = aUSDBase(item.totalComision, item.moneda, db.cotizacionDolar);
-                          const comiCargUSD = parseFloat(item.comisionCargadorUSD) || 0;
-                          const totalComiUSD = comiEqUSD + comiCargUSD;
+
+                        const mapaDias = {};
+                        ventasVisibles.forEach(v => {
+                          const fKey = (v.fecha || new Date(v.fechaTimestamp || v.id).toLocaleDateString('es-AR')).trim();
+                          const tsRef = v.fechaTimestamp || v.id || 0;
+                          const cantV = parseInt(v.cantidad) || 1;
+                          const cargV = obtenerCantCargadoresVenta(v);
+                          const comiTotalUSD = aUSDBase(v.totalComision, v.moneda, db.cotizacionDolar) + (cargV * 5);
+
+                          if (!mapaDias[fKey]) {
+                            mapaDias[fKey] = { fecha: fKey, tsOrden: tsRef, totalEquipos: 0, totalCargadores: 0, totalComisionUSD: 0, items: [] };
+                          }
+                          mapaDias[fKey].totalEquipos += cantV;
+                          mapaDias[fKey].totalCargadores += cargV;
+                          mapaDias[fKey].totalComisionUSD += comiTotalUSD;
+                          if (tsRef > mapaDias[fKey].tsOrden) mapaDias[fKey].tsOrden = tsRef;
+                          mapaDias[fKey].items.push(v);
+                        });
+
+                        const diasOrdenados = Object.values(mapaDias).sort((a, b) => b.tsOrden - a.tsOrden);
+
+                        return diasOrdenados.map(dia => {
+                          const abierto = q.length > 0 || desgloseVentaFecha === dia.fecha;
                           return (
-                            <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 hover:border-slate-700 transition">
-                              <div className="min-w-0 flex-1">
-                                {item.modelo ? (
-                                  <>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <p className="font-black text-white text-sm">{item.modelo} {item.almacenamiento}</p>
-                                      {item.color && <span className="bg-slate-900 border border-slate-700 text-slate-300 px-2 py-0.5 rounded text-[10px] font-bold">{item.color}</span>}
-                                      {item.bateria && <span className="bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 px-2 py-0.5 rounded text-[10px] font-mono font-bold"><i className="fa-solid fa-battery-full mr-1"></i>{item.bateria}</span>}
-                                      {item.vendioCargador && <span className="bg-amber-950 border border-amber-500/50 text-amber-300 px-2 py-0.5 rounded text-[10px] font-black"><i className="fa-solid fa-bolt mr-1"></i>+Cargador (U$D 5)</span>}
-                                    </div>
-                                    <div className="flex items-center gap-3 text-[11px] text-slate-400 font-mono mt-1 flex-wrap">
-                                      <span>{item.fecha}</span>
-                                      {item.imei && <span>• IMEI: <strong className="text-slate-300">{item.imei}</strong></span>}
-                                      {item.precioVenta > 0 && <span>• Venta: <strong className="text-cyan-400">{item.precioVentaMoneda === 'USD' ? `U$D ${parseFloat(item.precioVenta).toLocaleString('es-AR')}` : `$ ${Math.round(parseFloat(item.precioVenta)).toLocaleString('es-AR')} ARS`}</strong></span>}
-                                    </div>
-                                  </>
-                                ) : (
-                                  <>
-                                    <p className="font-black text-white text-sm">{item.fecha}</p>
-                                    <p className="text-xs text-slate-500">Vendidos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
-                                  </>
-                                )}
+                            <div key={dia.fecha} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-3 hover:border-slate-700 transition">
+                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="font-black text-white text-sm sm:text-base">{dia.fecha}</p>
+                                    <span className="bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 px-2 py-0.5 rounded text-[10px] font-black">
+                                      {dia.totalEquipos} {dia.totalEquipos === 1 ? 'equipo' : 'equipos'}
+                                    </span>
+                                    {dia.totalCargadores > 0 && (
+                                      <span className="bg-amber-950/80 border border-amber-500/50 text-amber-300 px-2 py-0.5 rounded text-[10px] font-black">
+                                        <i className="fa-solid fa-bolt mr-1"></i>{dia.totalCargadores} {dia.totalCargadores === 1 ? 'cargador' : 'cargadores'} (+U$D {dia.totalCargadores * 5})
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 mt-0.5">
+                                    {dia.items.length === 1 && !dia.items[0].modelo ? 'Registro grupal (podés editarlo para sumar cargadores)' : `${dia.items.length} ${dia.items.length === 1 ? 'operación registrada' : 'operaciones registradas'} este día`}
+                                  </p>
+                                </div>
+
+                                <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto border-t sm:border-t-0 border-slate-800/60 pt-2 sm:pt-0 shrink-0">
+                                  <button type="button" onClick={() => setDesgloseVentaFecha(desgloseVentaFecha === dia.fecha ? null : dia.fecha)} className="bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg text-xs font-bold transition">
+                                    <i className={`fa-solid ${abierto ? 'fa-chevron-up' : 'fa-list-ul'} mr-1.5`}></i>
+                                    {abierto ? 'Ocultar desglose' : `Ver desglose (${dia.items.length})`}
+                                  </button>
+                                  <div className="text-right">
+                                    <p className="text-[9px] text-slate-500 font-bold uppercase">Total del día</p>
+                                    <span className="font-mono font-black text-emerald-400 text-base sm:text-lg">+{formatDinero(convertirParaMostrar(dia.totalComisionUSD, 'USD'))}</span>
+                                  </div>
+                                </div>
                               </div>
 
-                              <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto border-t sm:border-t-0 border-slate-800/60 pt-2 sm:pt-0 shrink-0">
-                                <div className="text-left sm:text-right">
-                                  <p className="text-[9px] text-slate-500 font-bold uppercase">Tu Comisión Total</p>
-                                  <span className="font-mono font-black text-emerald-400 text-base">+{formatDinero(convertirParaMostrar(totalComiUSD, 'USD'))}</span>
-                                  {item.vendioCargador && !modoPrivado && (
-                                    <p className="text-[9px] text-amber-400 font-mono">Eq: {item.totalComision} {item.moneda} + U$D 5 carg.</p>
-                                  )}
+                              {abierto && (
+                                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-2 fade-in">
+                                  {dia.items.map(item => {
+                                    const cantCarg = obtenerCantCargadoresVenta(item);
+                                    const comiItemUSD = aUSDBase(item.totalComision, item.moneda, db.cotizacionDolar) + (cantCarg * 5);
+                                    return (
+                                      <div key={item.id} className="bg-slate-950 border border-slate-800/80 rounded-lg p-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 text-xs">
+                                        <div className="min-w-0 flex-1">
+                                          {item.modelo ? (
+                                            <>
+                                              <div className="flex items-center gap-1.5 flex-wrap">
+                                                <p className="font-black text-white text-xs sm:text-sm">{item.modelo} {item.almacenamiento}</p>
+                                                {item.color && <span className="bg-slate-900 border border-slate-700 text-slate-300 px-1.5 py-0.2 rounded text-[10px] font-bold">{item.color}</span>}
+                                                {item.bateria && <span className="bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold"><i className="fa-solid fa-battery-full mr-1"></i>{item.bateria}</span>}
+                                                {cantCarg > 0 && <span className="bg-amber-950 border border-amber-500/50 text-amber-300 px-1.5 py-0.2 rounded text-[10px] font-black"><i className="fa-solid fa-bolt mr-1"></i>+{cantCarg} Carg. (U$D {cantCarg * 5})</span>}
+                                              </div>
+                                              <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-1 flex-wrap">
+                                                {item.imei && <span>IMEI: <strong className="text-slate-300">{item.imei}</strong></span>}
+                                                {item.precioVenta > 0 && <span>• Venta: <strong className="text-cyan-400">{item.precioVentaMoneda === 'USD' ? `U$D ${parseFloat(item.precioVenta).toLocaleString('es-AR')}` : `$ ${Math.round(parseFloat(item.precioVenta)).toLocaleString('es-AR')} ARS`}</strong></span>}
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <p className="font-bold text-white">Carga grupal histórica: <span className="text-emerald-400">{item.cantidad} equipos</span></p>
+                                              {cantCarg > 0 && <span className="bg-amber-950 border border-amber-500/50 text-amber-300 px-1.5 py-0.2 rounded text-[10px] font-black"><i className="fa-solid fa-bolt mr-1"></i>+{cantCarg} Carg. (U$D {cantCarg * 5})</span>}
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <div className="flex items-center justify-between sm:justify-end gap-2.5 w-full sm:w-auto border-t sm:border-t-0 border-slate-800/60 pt-2 sm:pt-0 shrink-0">
+                                          <div className="text-left sm:text-right">
+                                            <span className="font-mono font-black text-emerald-400 text-sm">+{formatDinero(convertirParaMostrar(comiItemUSD, 'USD'))}</span>
+                                            {cantCarg > 0 && !modoPrivado && (
+                                              <p className="text-[9px] text-amber-400 font-mono">Eq: {item.totalComision} {item.moneda} + U$D {cantCarg * 5}</p>
+                                            )}
+                                          </div>
+                                          <div className="flex gap-1">
+                                            <button type="button" onClick={() => setEditandoVenta({
+                                              ...item,
+                                              modelo: item.modelo || '',
+                                              almacenamiento: item.almacenamiento || '128GB',
+                                              color: item.color || '',
+                                              bateria: item.bateria || '',
+                                              imei: item.imei || '',
+                                              precioVenta: item.precioVenta || '',
+                                              precioVentaMoneda: item.precioVentaMoneda || 'USD',
+                                              cantidad: item.cantidad || 1,
+                                              comisionUnitaria: item.comisionUnitaria || ((parseFloat(item.totalComision) || 0) / (parseInt(item.cantidad) || 1)),
+                                              moneda: item.moneda || 'ARS',
+                                              cantidadCargadores: obtenerCantCargadoresVenta(item),
+                                              ajustarCobrar: true
+                                            })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white w-7 h-7 rounded-lg text-[11px] transition" title="Editar venta o sumar cargadores">
+                                              <i className="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-7 h-7 rounded-lg text-[11px] transition" title="Eliminar venta">
+                                              <i className="fa-solid fa-trash"></i>
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
-                                <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg text-xs transition-colors"><i className="fa-solid fa-trash"></i></button>
-                              </div>
+                              )}
                             </div>
                           );
                         });
@@ -3256,7 +3636,7 @@
                   </div>
                 </div>
               )}
-
+              
               {/* VISTA 4: TALLER INGRESOS */}
               {vista === 'taller' && (
                 <div className="max-w-5xl mx-auto space-y-5 fade-in">
@@ -6646,6 +7026,106 @@
                 <div className="flex gap-2 pt-2">
                   <button type="submit" className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl transition text-xs">Guardar Cambios</button>
                   <button type="button" onClick={() => setEditandoTaller(null)} className="bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
+          {editandoVenta && (
+            <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
+              <form onSubmit={guardarEdicionVenta} className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-md w-full space-y-3.5 shadow-2xl max-h-[90vh] overflow-y-auto">
+                <h3 className="font-black text-white text-base border-b border-slate-800 pb-2.5">
+                  <i className="fa-solid fa-pen-to-square text-emerald-400 mr-2"></i>Editar Venta ({editandoVenta.fecha})
+                </h3>
+                <div className="space-y-2.5 text-xs">
+                  {editandoVenta.modelo || (parseInt(editandoVenta.cantidad) || 1) === 1 ? (
+                    <>
+                      <div className="grid grid-cols-12 gap-2">
+                        <div className="col-span-8">
+                          <label className="text-slate-400 font-bold mb-1 block">Modelo (Opcional en ventas viejas)</label>
+                          <input type="text" placeholder="Ej: iPhone 15 Pro" value={editandoVenta.modelo} onChange={e => setEditandoVenta({...editandoVenta, modelo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                        </div>
+                        <div className="col-span-4">
+                          <label className="text-slate-400 font-bold mb-1 block">Capacidad</label>
+                          <select value={editandoVenta.almacenamiento || '128GB'} onChange={e => setEditandoVenta({...editandoVenta, almacenamiento: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-white font-bold">
+                            <option value="64GB">64GB</option>
+                            <option value="128GB">128GB</option>
+                            <option value="256GB">256GB</option>
+                            <option value="512GB">512GB</option>
+                            <option value="1TB">1TB</option>
+                            <option value="2TB">2TB</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-slate-400 font-bold mb-1 block">Color</label>
+                          <input type="text" placeholder="Color" value={editandoVenta.color} onChange={e => setEditandoVenta({...editandoVenta, color: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 font-bold mb-1 block">Batería</label>
+                          <input type="text" placeholder="100% / Sellado" value={editandoVenta.bateria} onChange={e => setEditandoVenta({...editandoVenta, bateria: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-slate-400 font-bold mb-1 block">IMEI (15 núm.)</label>
+                          <input type="text" maxLength="15" placeholder="15 dígitos" value={editandoVenta.imei} onChange={e => setEditandoVenta({...editandoVenta, imei: e.target.value.replace(/\D/g, '')})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                        </div>
+                        <div>
+                          <label className="text-cyan-400 font-bold mb-1 block">Precio de Venta</label>
+                          <div className="flex">
+                            <input type="number" step="any" placeholder="0" value={editandoVenta.precioVenta} onChange={e => setEditandoVenta({...editandoVenta, precioVenta: e.target.value})} className="w-full min-w-0 bg-slate-950 border border-slate-700 rounded-l-xl px-2.5 py-2 text-white font-mono" />
+                            <select value={editandoVenta.precioVentaMoneda || 'USD'} onChange={e => setEditandoVenta({...editandoVenta, precioVentaMoneda: e.target.value})} className="bg-slate-950 border border-slate-700 border-l-0 rounded-r-xl px-2 text-white font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                      <label className="text-slate-400 font-bold mb-1 block">Cantidad de Equipos (Registro grupal)</label>
+                      <input type="number" min="1" required value={editandoVenta.cantidad} onChange={e => setEditandoVenta({...editandoVenta, cantidad: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-center font-bold" />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-emerald-400 font-bold mb-1 block">Comisión por Equipo</label>
+                    <div className="flex gap-2">
+                      <input type="number" step="any" required value={editandoVenta.comisionUnitaria} onChange={e => setEditandoVenta({...editandoVenta, comisionUnitaria: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+                      <select value={editandoVenta.moneda} onChange={e => setEditandoVenta({...editandoVenta, moneda: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 text-white font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                    </div>
+                  </div>
+
+                  {/* CARGADORES VENDIDOS (+5 USD FIJOS C/U) */}
+                  <div className="bg-amber-950/30 border border-amber-500/40 rounded-xl p-3 space-y-2">
+                    <label className="text-amber-300 font-black block">
+                      <i className="fa-solid fa-plug-circle-bolt mr-1.5"></i>Cargadores vendidos (+U$D 5 USD c/u)
+                    </label>
+                    {(parseInt(editandoVenta.cantidad) || 1) > 1 ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-300 text-[11px]">¿Cuántos cargadores vendiste ese día?</span>
+                        <input type="number" min="0" value={editandoVenta.cantidadCargadores} onChange={e => setEditandoVenta({...editandoVenta, cantidadCargadores: e.target.value})} className="w-20 bg-slate-950 border border-amber-500 rounded-lg px-2.5 py-1.5 text-amber-400 font-mono font-black text-center" />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <button type="button" onClick={() => setEditandoVenta({...editandoVenta, cantidadCargadores: 0})} className={`py-1.5 rounded-lg font-bold border transition ${(parseInt(editandoVenta.cantidadCargadores) || 0) === 0 ? 'bg-slate-700 text-white border-slate-500' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                          No (0 carg.)
+                        </button>
+                        <button type="button" onClick={() => setEditandoVenta({...editandoVenta, cantidadCargadores: 1})} className={`py-1.5 rounded-lg font-black border transition ${(parseInt(editandoVenta.cantidadCargadores) || 0) >= 1 ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-amber-400 border-amber-500/40'}`}>
+                          ⚡ Sí (+U$D 5)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <label className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl p-2.5 cursor-pointer text-[11px] text-slate-300">
+                    <input type="checkbox" checked={!!editandoVenta.ajustarCobrar} onChange={e => setEditandoVenta({...editandoVenta, ajustarCobrar: e.target.checked})} className="accent-emerald-500" />
+                    <span>Reflejar automáticamente la diferencia en <strong>Cuentas a Cobrar</strong></span>
+                  </label>
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition text-xs">Guardar Cambios</button>
+                  <button type="button" onClick={() => setEditandoVenta(null)} className="bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
                 </div>
               </form>
             </div>
