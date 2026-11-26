@@ -181,6 +181,8 @@
       const [filtroVentas, setFiltroVentas] = useState('');
       const [desgloseVentaFecha, setDesgloseVentaFecha] = useState(null);
       const [editandoVenta, setEditandoVenta] = useState(null);
+      const [mostrarVentaFantasma, setMostrarVentaFantasma] = useState(false);
+      const [ventaFantasma, setVentaFantasma] = useState({ cantidad: '7', nota: 'Ventas del mes previas al sistema', acreditarBonus: true });
       
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS', reparadoAntesIngreso: 'no', detalleReparadoIngreso: '' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
@@ -200,7 +202,7 @@
       const [dolarInput, setDolarInput] = useState('');
       const [pagoActivo, setPagoActivo] = useState({ idGasto: null, walletId: '' });
       const [pagoDeudaActivo, setPagoDeudaActivo] = useState({ idDeuda: null, walletId: '', montoAbono: '', monedaAbono: 'ARS' });
-      const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' }); 
+      const [cobroDeudaActivo, setCobroDeudaActivo] = useState({ idDeuda: null, destinoTipo: 'billetera', walletId: '', deudaProveedorId: '', imputacion: 'proporcional', montoCobro: '', monedaCobro: 'ARS' }); 
       const [desgloseCobrarId, setDesgloseCobrarId] = useState(null); 
       const [desgloseDeudaId, setDesgloseDeudaId] = useState(null); 
       
@@ -759,8 +761,134 @@
         setNuevaDeudaCobrar({ deudor: '', motivo: '', monto: '', moneda: 'USD', walletId: '' });
       };
 
+      const calcularDesgloseMovCobrar = (itemDeuda, mov) => {
+        const coti = parseFloat(db.cotizacionDolar) || 1500;
+        const monMov = mov.moneda || 'USD';
+        const valRaw = parseFloat(mov.monto !== undefined ? mov.monto : mov.montoUSD) || 0;
+        const valUSD = aUSDBase(valRaw, monMov, coti);
+
+        if (mov.tipo === 'abono') {
+          return { valUSD, repUSD: 0, ganUSD: 0, esAbono: true, imputacion: mov.imputacion || 'proporcional' };
+        }
+
+        if (mov.costoRepuestoUSD !== undefined && mov.costoRepuestoUSD !== null) {
+          const repUSD = Math.min(valUSD, Math.max(0, parseFloat(mov.costoRepuestoUSD) || 0));
+          return { valUSD, repUSD, ganUSD: Math.max(0, valUSD - repUSD), esAbono: false };
+        }
+
+        // Compatibilidad con movimientos cargados antes de este nivel (cruza por IMEI o título contra reparacionesFin)
+        const det = mov.detalle || '';
+        const tit = (mov.titulo || '').toLowerCase();
+        const esCuentaTallerOGremio = (itemDeuda.motivo || '').toLowerCase().includes('reparaci') || (itemDeuda.motivo || '').toLowerCase().includes('50%') || det.includes('IMEI:') || det.includes('Rep (');
+
+        if (esCuentaTallerOGremio) {
+          const matchImei = det.match(/\b\d{15}\b/);
+          let repMatch = null;
+          if (matchImei) {
+            repMatch = (db.reparacionesFin || []).find(r => r.equipoOriginal?.imei === matchImei[0]);
+          }
+          if (!repMatch) {
+            repMatch = (db.reparacionesFin || []).find(r => {
+              const mod = (r.equipoOriginal?.modelo || '').toLowerCase().trim();
+              const prop = (r.equipoOriginal?.origen === 'cliente' ? r.equipoOriginal?.clienteNombre : r.equipoOriginal?.gremio || '').toLowerCase().trim();
+              if (!mod || !tit.includes(mod)) return false;
+              const matchProp = !prop || tit.includes(prop) || (itemDeuda.deudor || '').toLowerCase().includes(prop);
+              return matchProp && (!mov.fecha || r.fecha === mov.fecha);
+            });
+          }
+          if (repMatch) {
+            const costoR = parseFloat(repMatch.costoRepuestoUSD) || 0;
+            if (repMatch.equipoOriginal?.origen === 'gremio') {
+              const repUSD = Math.min(valUSD, costoR);
+              return { valUSD, repUSD, ganUSD: Math.max(0, valUSD - repUSD), esAbono: false };
+            } else {
+              const totR = parseFloat(repMatch.montoCobrado) || 0;
+              const ganNetaR = Math.max(0, totR - costoR);
+              const miParteTotR = costoR + (ganNetaR / 2);
+              const propRep = miParteTotR > 0 ? (costoR / miParteTotR) : 0;
+              const repUSD = Math.min(valUSD, valUSD * propRep);
+              return { valUSD, repUSD, ganUSD: Math.max(0, valUSD - repUSD), esAbono: false };
+            }
+          }
+        }
+
+        return { valUSD, repUSD: 0, ganUSD: valUSD, esAbono: false };
+      };
+
+      const calcularDesgloseGananciaDeuda = (itemDeuda) => {
+        const coti = parseFloat(db.cotizacionDolar) || 1500;
+        const saldoActualUSD = aUSDBase(itemDeuda.monto, itemDeuda.moneda || 'USD', coti);
+        const movs = Array.isArray(itemDeuda.movimientos) ? itemDeuda.movimientos : [];
+
+        let repCargos = 0;
+        let ganCargos = 0;
+        let abonosRep = 0;
+        let abonosGan = 0;
+        let abonosProp = 0;
+
+        movs.forEach(m => {
+          const info = calcularDesgloseMovCobrar(itemDeuda, m);
+          if (info.esAbono) {
+            if (info.imputacion === 'repuestos') abonosRep += info.valUSD;
+            else if (info.imputacion === 'ganancia') abonosGan += info.valUSD;
+            else abonosProp += info.valUSD;
+          } else {
+            repCargos += info.repUSD;
+            ganCargos += info.ganUSD;
+          }
+        });
+
+        let repRest = repCargos;
+        let ganRest = ganCargos;
+
+        if (abonosRep > 0) {
+          const desc = Math.min(repRest, abonosRep);
+          repRest -= desc;
+          const sobra = abonosRep - desc;
+          if (sobra > 0) ganRest = Math.max(0, ganRest - sobra);
+        }
+        if (abonosGan > 0) {
+          const desc = Math.min(ganRest, abonosGan);
+          ganRest -= desc;
+          const sobra = abonosGan - desc;
+          if (sobra > 0) repRest = Math.max(0, repRest - sobra);
+        }
+        if (abonosProp > 0 && (repRest + ganRest) > 0.001) {
+          const totR = repRest + ganRest;
+          const factor = Math.max(0, 1 - (abonosProp / totR));
+          repRest *= factor;
+          ganRest *= factor;
+        }
+
+        const sumaCalc = repRest + ganRest;
+        let repFinal = 0;
+        let ganFinal = saldoActualUSD;
+
+        if (sumaCalc > 0.01) {
+          if (saldoActualUSD < sumaCalc - 0.05) {
+            const factor = saldoActualUSD / sumaCalc;
+            repFinal = repRest * factor;
+            ganFinal = ganRest * factor;
+          } else {
+            repFinal = Math.min(saldoActualUSD, repRest);
+            ganFinal = Math.max(0, saldoActualUSD - repFinal);
+          }
+        }
+
+        return {
+          totalUSD: saldoActualUSD,
+          repuestosUSD: redondear(repFinal),
+          gananciaUSD: redondear(ganFinal),
+          tieneRepuestos: repFinal > 0.01 || repCargos > 0.01
+        };
+      };
+
       const procesarCobroDeudaLibre = (itemDeuda) => {
-        if (!cobroDeudaActivo.walletId || !cobroDeudaActivo.montoCobro) return alert('Completá los datos.');
+        const dest = cobroDeudaActivo.destinoTipo || 'billetera';
+        if (!cobroDeudaActivo.montoCobro) return alert('Ingresá el monto.');
+        if (dest === 'billetera' && !cobroDeudaActivo.walletId) return alert('Elegí la billetera donde entra la plata.');
+        if (dest === 'proveedor' && !cobroDeudaActivo.deudaProveedorId) return alert('Elegí la deuda de proveedor a descontar.');
+
         const cobroFisico = parseFloat(cobroDeudaActivo.montoCobro);
         if (cobroFisico <= 0) return alert('Monto inválido.');
 
@@ -771,19 +899,49 @@
 
         if (redondear(abonoConvertido) > parseFloat(itemDeuda.monto) + 0.5) return alert('No podés cobrar más de lo que te deben.');
 
-        const activosAc = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroFisico, cobroDeudaActivo.monedaCobro, db.activos);
-        const wUsada = activosAc.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre;
+        let activosAc = [...(db.activos || [])];
+        let deudasPagarAc = [...(db.deudas || [])];
+        let tituloDestino = '';
+        let textoLogDestino = '';
+        const imp = cobroDeudaActivo.imputacion || 'proporcional';
+        const etqImp = imp === 'ganancia' ? ' [Ganancia]' : imp === 'repuestos' ? ' [Repuestos]' : '';
+
+        if (dest === 'billetera') {
+          activosAc = procesarReembolsoWallet(cobroDeudaActivo.walletId, cobroFisico, cobroDeudaActivo.monedaCobro, activosAc);
+          const wUsada = activosAc.find(w => w.id === parseInt(cobroDeudaActivo.walletId))?.nombre || 'Billetera';
+          tituloDestino = `Pago recibido a ${wUsada}${etqImp}`; textoLogDestino = `Entró a ${wUsada}`;
+        } else if (dest === 'proveedor') {
+          const deudaProv = deudasPagarAc.find(d => d.id === parseInt(cobroDeudaActivo.deudaProveedorId));
+          if (!deudaProv) return alert('Deuda de proveedor no encontrada.');
+          let abonoEnMonProv = cobroFisico;
+          if (cobroDeudaActivo.monedaCobro === 'ARS' && deudaProv.moneda === 'USD') abonoEnMonProv = cobroFisico / db.cotizacionDolar;
+          if (cobroDeudaActivo.monedaCobro === 'USD' && deudaProv.moneda === 'ARS') abonoEnMonProv = cobroFisico * db.cotizacionDolar;
+          const nvoSaldoProv = parseFloat(deudaProv.monto) - abonoEnMonProv;
+          const movProv = { id: Date.now() + 5, fecha: new Date().toLocaleDateString(), motivo: `Transferido directo por "${itemDeuda.deudor}" (${cobroFisico}${cobroDeudaActivo.monedaCobro})`, monto: abonoEnMonProv, moneda: deudaProv.moneda, tipo: 'abono' };
+          if (nvoSaldoProv <= (deudaProv.moneda === 'ARS' ? 10 : 0.05)) {
+            deudasPagarAc = deudasPagarAc.filter(d => d.id !== deudaProv.id);
+          } else {
+            deudasPagarAc = deudasPagarAc.map(d => d.id === deudaProv.id ? {
+              ...d,
+              monto: deudaProv.moneda === 'ARS' ? Math.round(nvoSaldoProv) : nvoSaldoProv.toFixed(4),
+              movimientos: [movProv, ...(d.movimientos || [])]
+            } : d);
+          }
+          tituloDestino = `Enviado directo a Proveedor: ${deudaProv.acreedor}${etqImp}`;
+          textoLogDestino = `Descontado directo de deuda con ${deudaProv.acreedor} (sin tocar billeteras)`;
+        } else {
+          tituloDestino = `Pago directo a proveedor / externo${etqImp}`;
+          textoLogDestino = `Cancelado por pago directo externo (sin tocar billeteras)`;
+        }
+
         const nvoMonto = parseFloat(itemDeuda.monto) - abonoConvertido;
-        const movAbono = { id: Date.now(), fecha: new Date().toLocaleDateString(), titulo: `Pago recibido (a ${wUsada})`, detalle: `Entregó: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`, monto: abonoConvertido, moneda: monedaDeuda, tipo: 'abono' };
-
-        let deudasAc = [];
-        const umbralCierre = monedaDeuda === 'ARS' ? 10 : 0.05;
-        if (nvoMonto <= umbralCierre) deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
-        else deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? { ...d, monto: monedaDeuda === 'ARS' ? Math.round(nvoMonto) : redondear(nvoMonto), movimientos: [movAbono, ...(d.movimientos || [])] } : d);
-
-        const log = generarLog('Registró Cobro', `Recibió ${cobroFisico} ${cobroDeudaActivo.monedaCobro} de "${itemDeuda.deudor}". Entró a ${wUsada}.`);
-        guardarEnNube({ ...db, activos: activosAc, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-        setCobroDeudaActivo({ idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS' });
+        const movAbono = {
+          id: Date.now(),
+          fecha: new Date().toLocaleDateString(),
+          titulo: tituloDestino,
+          detalle: `Monto: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`, monto: abonoConvertido, moneda: monedaDeuda, imputacion: imp, tipo: 'abono' };  let deudasAc = []; const umbralCierre = monedaDeuda === 'ARS' ? 10 : 0.05; if (nvoMonto <= umbralCierre) deudasAc = (db.deudasCobrar \vert{}\vert{} []).filter(d => d.id !== itemDeuda.id); else deudasAc = (db.deudasCobrar \vert{}\vert{} []).map(d => d.id === itemDeuda.id ? { ...d, monto: monedaDeuda === 'ARS' ? Math.round(nvoMonto) : redondear(nvoMonto), movimientos: [movAbono, ...(d.movimientos \vert{}\vert{} [])] } : d);  const log = generarLog('Registró Cobro', `Liquidó ${cobroFisico} ${cobroDeudaActivo.monedaCobro}${etqImp} de "${itemDeuda.deudor}". ${textoLogDestino}.`);
+        guardarEnNube({ ...db, activos: activosAc, deudas: deudasPagarAc, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setCobroDeudaActivo({ idDeuda: null, destinoTipo: 'billetera', walletId: '', deudaProveedorId: '', imputacion: 'proporcional', montoCobro: '', monedaCobro: 'ARS' });
       };
 
       const llevarACuotasPosnet = (nombreEquipo, montoVal, monedaVal = 'ARS') => {
@@ -849,6 +1007,13 @@
           lineas.push(`💰 *SALDO TOTAL A LIQUIDAR:* *${fmtMoneda(saldoNum, 'ARS')}*`);
         }
 
+        const desg = calcularDesgloseGananciaDeuda(item);
+        if (desg.repuestosUSD > 0.01) {
+          const repARS = Math.round(desg.repuestosUSD * coti);
+          const ganARS = Math.round(desg.gananciaUSD * coti);
+          lineas.push(`   ↳ 📦 *Repuestos (Proveedor):* U$D ${desg.repuestosUSD.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ($${repARS.toLocaleString('es-AR')})`);
+          lineas.push(`   ↳ 💰 *Ganancia / Mano de obra:* U$D ${desg.gananciaUSD.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ($${ganARS.toLocaleString('es-AR')})`);
+        }
         navigator.clipboard.writeText(lineas.join('\n'));
         setCopiadoId(`liq_${item.id}`);
         setTimeout(() => setCopiadoId(prev => (prev === `liq_${item.id}` ? null : prev)), 2500);
@@ -1214,6 +1379,48 @@
           guardarEnNube({ ...db, deudasCobrar: res.deudasCobrar, bonosVentasAcreditados: res.bonosVentasAcreditados, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
       };
 
+      const registrarVentasFantasma = (e) => {
+          e.preventDefault();
+          const cant = parseInt(ventaFantasma.cantidad) || 0;
+          if (cant <= 0) return alert('Ingresá una cantidad mayor a 0.');
+          const notaTrim = (ventaFantasma.nota || 'Ventas previas al sistema').trim();
+          const fechaHoy = new Date().toLocaleDateString('es-AR');
+          const tsNow = Date.now();
+
+          const regFantasma = {
+              id: tsNow,
+              fechaTimestamp: tsNow,
+              fecha: fechaHoy,
+              cantidad: cant,
+              esFantasma: true,
+              notaFantasma: notaTrim,
+              modelo: '',
+              comisionUnitaria: 0,
+              totalComision: 0,
+              moneda: 'ARS',
+              vendioCargador: false,
+              cantidadCargadores: 0,
+              comisionCargadorUSD: 0
+          };
+
+          const ventasAc = [regFantasma, ...(db.ventas || [])];
+          let deudasCobrarAc = [...(db.deudasCobrar || [])];
+          let bonosAc = { ...(db.bonosVentasAcreditados || {}) };
+          let txtBonus = '';
+
+          if (ventaFantasma.acreditarBonus) {
+              const resBonus = aplicarBonusVentasSiCorresponde(obtenerMesKeyVenta(regFantasma), ventasAc, deudasCobrarAc, bonosAc);
+              deudasCobrarAc = resBonus.deudasCobrar;
+              bonosAc = resBonus.bonosVentasAcreditados;
+              if (resBonus.bonusAcreditadoAhoraARS > 0) {
+                  txtBonus = ` • Destrabó y acreditó BONUS +$${resBonus.bonusAcreditadoAhoraARS.toLocaleString('es-AR')} ARS`;
+              }
+          }
+
+          const log = generarLog('Cargó Ventas Previas (Contador)', `Sumó ${cant} ventas previas al sistema (${notaTrim}) sin comisión para el contador mensual${txtBonus}.`, regFantasma);
+          guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, bonosVentasAcreditados: bonosAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+          setMostrarVentaFantasma(false);
+      };
       const registrarVenta = (e) => {
           e.preventDefault();
           if (!nuevaVenta.modelo.trim()) return alert('Ingresá el modelo del equipo vendido.');
@@ -2098,7 +2305,7 @@
           let log;
           if (equipo.origen === 'gremio') {
               let deudasCb = [...(db.deudasCobrar || [])];
-              const movGremio = { id: Date.now() + 2, fecha: new Date().toLocaleDateString(), titulo: `${equipo.modelo} (${equipo.falla})`, detalle: `IMEI: ${equipo.imei}${nomRep ? ` • Rep: ${nomRep}` : ''}`, montoUSD: mUSD, tipo: 'cargo' };
+              const movGremio = { id: Date.now() + 2, fecha: new Date().toLocaleDateString(), titulo: `${equipo.modelo} (${equipo.falla})`, detalle: `IMEI: ${equipo.imei}${nomRep ? ` • Rep: ${nomRep}` : ''}`, montoUSD: mUSD, monto: mUSD, moneda: 'USD', costoRepuestoUSD: redondear(costoRepUSD), gananciaNetaUSD: redondear(Math.max(0, mUSD - costoRepUSD)), tipo: 'cargo' };
               const idx = deudasCb.findIndex(d => d.deudor === equipo.gremio && d.motivo === "Acumulado de Reparaciones Gremio");
               if (idx !== -1) {
                   deudasCb[idx].monto = (parseFloat(deudasCb[idx].monto) + mUSD).toFixed(4);
@@ -2139,8 +2346,12 @@
               id: Date.now() + 2,
               fecha: new Date().toLocaleDateString(),
               titulo: `${item.equipoOriginal.modelo} (${item.equipoOriginal.clienteNombre})`,
-              detalle: `Cliente pagó ${mFisico} ${panelCobroReparacion.monedaPago} en ${mtNombre} • ${item.repuestoUsado ? `Rep (${item.repuestoUsado}): ${formatDinero(convertirParaMostrar(repRecuperadoUSD, 'USD'))} + 50% Gna: ${formatDinero(convertirParaMostrar(gna50USD, 'USD'))}` : `50% Mano de Obra`}`,
+              detalle: `IMEI: ${item.equipoOriginal.imei} • Cliente pagó ${mFisico} ${panelCobroReparacion.monedaPago} en ${mtNombre} • ${item.repuestoUsado ? `Rep (${item.repuestoUsado}): ${formatDinero(convertirParaMostrar(repRecuperadoUSD, 'USD'))} + 50% Gna: ${formatDinero(convertirParaMostrar(gna50USD, 'USD'))}` : `50% Mano de Obra`}`,
               montoUSD: miParteAbonoUSD,
+              monto: miParteAbonoUSD,
+              moneda: 'USD',
+              costoRepuestoUSD: redondear(repRecuperadoUSD),
+              gananciaNetaUSD: redondear(gna50USD),
               tipo: 'cargo'
           };
 
@@ -3421,12 +3632,42 @@
                   </div>
 
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
-                    <div className="border-b border-slate-800 pb-2.5 flex justify-between items-center gap-2">
+                    <div className="border-b border-slate-800 pb-2.5 flex flex-wrap justify-between items-center gap-2">
                       <div>
                         <h3 className="text-sm font-bold text-white">Registrar Venta de Equipo</h3>
                         <p className="text-[11px] text-slate-400">Cargá los datos del equipo vendido y si incluiste cargador (+U$D 5 fijos).</p>
                       </div>
+                      <button type="button" onClick={() => setMostrarVentaFantasma(!mostrarVentaFantasma)} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${mostrarVentaFantasma ? 'bg-purple-600 text-white border-purple-400' : 'bg-slate-950 text-purple-300 border-purple-500/40 hover:bg-slate-800'}`}>
+                        <i className={`fa-solid ${mostrarVentaFantasma ? 'fa-chevron-up' : 'fa-ghost'}`}></i>
+                        {mostrarVentaFantasma ? 'Ocultar Ajuste' : '👻 Cargar Ventas Previas (Solo contador)'}
+                      </button>
                     </div>
+
+                    {mostrarVentaFantasma && (
+                      <form onSubmit={registrarVentasFantasma} className="bg-purple-950/25 border-2 border-purple-500/40 rounded-xl p-3.5 space-y-3 fade-in">
+                        <div>
+                          <h4 className="text-xs font-black text-purple-300 uppercase"><i className="fa-solid fa-ghost mr-1.5"></i>Sumar ventas previas al sistema (Sin comisión)</h4>
+                          <p className="text-[11px] text-slate-400">Suma unidades al contador mensual para el Bonus (30/60/90) sin cargar comisiones ficticias en Cuentas a Cobrar.</p>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                          <div className="sm:col-span-3">
+                            <label className="text-[10px] font-bold text-purple-300 uppercase block mb-1">Cantidad de ventas</label>
+                            <input type="number" min="1" required value={ventaFantasma.cantidad} onChange={e => setVentaFantasma({...ventaFantasma, cantidad: e.target.value})} className="w-full bg-slate-950 border border-purple-500/50 rounded-xl px-3 py-2 text-white font-mono font-black text-center text-xs" />
+                          </div>
+                          <div className="sm:col-span-6">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Motivo / Nota</label>
+                            <input type="text" required value={ventaFantasma.nota} onChange={e => setVentaFantasma({...ventaFantasma, nota: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs" />
+                          </div>
+                          <button type="submit" className="sm:col-span-3 bg-purple-600 hover:bg-purple-500 text-white font-black py-2 px-3 rounded-xl text-xs transition h-[36px] shadow">
+                            Sumar al Mes
+                          </button>
+                        </div>
+                        <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer">
+                          <input type="checkbox" checked={!!ventaFantasma.acreditarBonus} onChange={e => setVentaFantasma({...ventaFantasma, acreditarBonus: e.target.checked})} className="accent-purple-500" />
+                          <span>Acreditar automáticamente el Bonus en <strong>Cuentas a Cobrar</strong> si al sumarlas supero los 30 / 60 / 90</span>
+                        </label>
+                      </form>
+                    )}
 
                     <form onSubmit={registrarVenta} className="bg-slate-950 p-3.5 sm:p-4 rounded-xl border border-slate-800 space-y-3">
                       <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
@@ -3587,7 +3828,13 @@
                                             </>
                                           ) : (
                                             <div className="flex items-center gap-2 flex-wrap">
-                                              <p className="font-bold text-white">Carga grupal histórica: <span className="text-emerald-400">{item.cantidad} equipos</span></p>
+                                              {item.esFantasma ? (
+                                                <p className="font-bold text-purple-300">
+                                                  <i className="fa-solid fa-ghost mr-1.5"></i>{item.notaFantasma || 'Ventas previas al sistema'}: <span className="text-white font-mono">+{item.cantidad} eq.</span> <span className="text-[10px] text-slate-400 font-normal">(Solo contador)</span>
+                                                </p>
+                                              ) : (
+                                                <p className="font-bold text-white">Carga grupal histórica: <span className="text-emerald-400">{item.cantidad} equipos</span></p>
+                                              )}
                                               {cantCarg > 0 && <span className="bg-amber-950 border border-amber-500/50 text-amber-300 px-1.5 py-0.2 rounded text-[10px] font-black"><i className="fa-solid fa-bolt mr-1"></i>+{cantCarg} Carg. (U$D {cantCarg * 5})</span>}
                                             </div>
                                           )}
@@ -4595,10 +4842,32 @@
               {/* VISTA 7: DEUDAS A COBRAR */}
               {vista === 'cobrar' && (
                 <div className="max-w-4xl mx-auto space-y-5 fade-in">
-                  <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 shadow-lg text-center">
-                    <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-hand-holding-dollar mr-1.5"></i>Total a Cobrar</p>
-                    <h2 className="text-2xl sm:text-3xl font-black text-white">{formatDinero(convertirParaMostrar(tDeudCobUSD, 'USD'))}</h2>
-                  </div>
+                  {(() => {
+                    const totDesg = (db.deudasCobrar || []).reduce((acc, d) => {
+                      const dg = calcularDesgloseGananciaDeuda(d);
+                      acc.repUSD += dg.repuestosUSD;
+                      acc.ganUSD += dg.gananciaUSD;
+                      return acc;
+                    }, { repUSD: 0, ganUSD: 0 });
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-4 shadow-lg text-center">
+                          <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-hand-holding-dollar mr-1.5"></i>Total a Cobrar</p>
+                          <h2 className="text-xl sm:text-2xl font-black text-white">{formatDinero(convertirParaMostrar(tDeudCobUSD, 'USD'))}</h2>
+                        </div>
+                        <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 shadow-lg text-center">
+                          <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-sack-dollar mr-1.5"></i>Tu Ganancia Neta / Libre</p>
+                          <h2 className="text-xl sm:text-2xl font-black text-cyan-400">{formatDinero(convertirParaMostrar(totDesg.ganUSD, 'USD'))}</h2>
+                          <p className="text-[9px] text-slate-500 mt-0.5">Para ingresar a tu cuenta</p>
+                        </div>
+                        <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4 shadow-lg text-center">
+                          <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-microchip mr-1.5"></i>Repuestos (No es ganancia)</p>
+                          <h2 className="text-xl sm:text-2xl font-black text-amber-400">{formatDinero(convertirParaMostrar(totDesg.repUSD, 'USD'))}</h2>
+                          <p className="text-[9px] text-slate-500 mt-0.5">Para reponer / pagar proveedor</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
                     <div className="border-b border-slate-800 pb-2.5">
                       <h3 className="text-sm font-bold text-white">Prestar Plata Manualmente</h3>
@@ -4624,6 +4893,19 @@
                       {(db.deudasCobrar || []).length === 0 ? <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">No hay cuentas por cobrar.</p> : db.deudasCobrar.map(item => {
                         const diasPasados = item.fechaTimestamp ? calcularDiasPasados(item.fechaTimestamp) : calcularDiasPasados(item.id);
                         const colorDias = diasPasados > 30 ? 'text-rose-400' : 'text-emerald-400';
+                        const desg = calcularDesgloseGananciaDeuda(item);
+                        const monPanel = cobroDeudaActivo.monedaCobro || monedaVisual;
+
+                        const completarMontoCobro = (montoUSD, impTipo, destSugerido = null) => {
+                          const val = monPanel === 'ARS' ? Math.round(montoUSD * db.cotizacionDolar) : redondear(montoUSD);
+                          setCobroDeudaActivo(prev => ({
+                            ...prev,
+                            montoCobro: String(val),
+                            imputacion: impTipo,
+                            destinoTipo: destSugerido || prev.destinoTipo
+                          }));
+                        };
+
                         return (
                         <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
                           <div className="flex justify-between items-start gap-2">
@@ -4638,28 +4920,101 @@
                             </div>
                           </div>
 
+                          {/* SEPARACIÓN VISUAL: GANANCIA NETA vs REPUESTOS */}
+                          {desg.tieneRepuestos && (
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="bg-amber-950/30 border border-amber-500/40 rounded-xl px-3 py-2 flex justify-between items-center gap-2">
+                                <div>
+                                  <span className="text-[9px] font-black text-amber-400 uppercase block">📦 Repuestos (Proveedor)</span>
+                                  <span className="text-[10px] text-slate-400">No es ganancia</span>
+                                </div>
+                                <span className="font-mono font-black text-amber-300 text-xs sm:text-sm shrink-0">
+                                  {formatDinero(convertirParaMostrar(desg.repuestosUSD, 'USD', monedaVisual), monedaVisual)}
+                                </span>
+                              </div>
+                              <div className="bg-cyan-950/30 border border-cyan-500/40 rounded-xl px-3 py-2 flex justify-between items-center gap-2">
+                                <div>
+                                  <span className="text-[9px] font-black text-cyan-400 uppercase block">💰 Tu Ganancia Neta</span>
+                                  <span className="text-[10px] text-slate-400">Comisión limpia</span>
+                                </div>
+                                <span className="font-mono font-black text-cyan-300 text-xs sm:text-sm shrink-0">
+                                  {formatDinero(convertirParaMostrar(desg.gananciaUSD, 'USD', monedaVisual), monedaVisual)}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
                           {cobroDeudaActivo.idDeuda === item.id ? (
-                            <div className="bg-slate-900 p-3 rounded-xl border border-indigo-500/50 flex flex-col gap-2.5 fade-in">
+                            <div className="bg-slate-900 p-3.5 rounded-xl border border-indigo-500/50 flex flex-col gap-2.5 fade-in">
+                              {/* ATAJOS RÁPIDOS DE MONTO (SOLO GANANCIA / SOLO REPUESTOS / TODO) */}
+                              {desg.tieneRepuestos && (
+                                <div className="flex flex-wrap gap-1.5 pb-1 border-b border-slate-800">
+                                  {desg.gananciaUSD > 0.01 && (
+                                    <button type="button" onClick={() => completarMontoCobro(desg.gananciaUSD, 'ganancia', 'billetera')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cobroDeudaActivo.imputacion === 'ganancia' ? 'bg-cyan-600 text-white border-cyan-400' : 'bg-slate-950 text-cyan-300 border-cyan-500/40 hover:bg-slate-800'}`}>
+                                      💰 Solo Ganancia ({formatDinero(convertirParaMostrar(desg.gananciaUSD, 'USD', monPanel), monPanel)})
+                                    </button>
+                                  )}
+                                  {desg.repuestosUSD > 0.01 && (
+                                    <button type="button" onClick={() => completarMontoCobro(desg.repuestosUSD, 'repuestos')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cobroDeudaActivo.imputacion === 'repuestos' ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-amber-300 border-amber-500/40 hover:bg-slate-800'}`}>
+                                      📦 Solo Repuestos ({formatDinero(convertirParaMostrar(desg.repuestosUSD, 'USD', monPanel), monPanel)})
+                                    </button>
+                                  )}
+                                  <button type="button" onClick={() => completarMontoCobro(desg.totalUSD, 'proporcional')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${cobroDeudaActivo.imputacion === 'proporcional' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-950 text-slate-300 border-slate-700 hover:bg-slate-800'}`}>
+                                    ✅ Todo ({formatDinero(convertirParaMostrar(desg.totalUSD, 'USD', monPanel), monPanel)})
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* SELECTOR DE DESTINO DEL DINERO */}
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                                <button type="button" onClick={() => setCobroDeudaActivo({...cobroDeudaActivo, destinoTipo: 'billetera'})} className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition ${(cobroDeudaActivo.destinoTipo || 'billetera') === 'billetera' ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                                  💳 A mi Billetera
+                                </button>
+                                <button type="button" onClick={() => setCobroDeudaActivo({...cobroDeudaActivo, destinoTipo: 'proveedor'})} className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition ${cobroDeudaActivo.destinoTipo === 'proveedor' ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                                  🤝 Directo a Deuda Prov.
+                                </button>
+                                <button type="button" onClick={() => setCobroDeudaActivo({...cobroDeudaActivo, destinoTipo: 'externo'})} className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition ${cobroDeudaActivo.destinoTipo === 'externo' ? 'bg-slate-700 text-white border-slate-500' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>
+                                  📦 Pago externo (Sin bill.)
+                                </button>
+                              </div>
+
                               <div className="flex flex-col sm:flex-row gap-2">
                                 <div className="flex flex-1">
-                                  <input type="number" step="any" placeholder="Billete recibido" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-full min-w-0 bg-slate-950 border border-slate-700 rounded-l-lg px-3 py-1.5 text-white font-mono text-xs" />
+                                  <input type="number" step="any" placeholder="Monto" value={cobroDeudaActivo.montoCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, montoCobro: e.target.value})} className="w-full min-w-0 bg-slate-950 border border-slate-700 rounded-l-lg px-3 py-1.5 text-white font-mono text-xs" />
                                   <select value={cobroDeudaActivo.monedaCobro} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, monedaCobro: e.target.value})} className="bg-slate-950 border border-slate-700 border-l-0 rounded-r-lg px-2 text-xs text-white font-bold">
                                     <option value="ARS">ARS</option><option value="USD">USD</option>
                                   </select>
                                 </div>
-                                <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
-                                  <option value="">¿A qué billetera entró?</option>
-                                  {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
-                                </select>
+
+                                {(cobroDeudaActivo.destinoTipo || 'billetera') === 'billetera' && (
+                                  <select value={cobroDeudaActivo.walletId} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, walletId: e.target.value})} className="flex-1 bg-slate-950 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                                    <option value="">¿A qué billetera entró?</option>
+                                    {billeterasDisponibles.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                                  </select>
+                                )}
+
+                                {cobroDeudaActivo.destinoTipo === 'proveedor' && (
+                                  <select value={cobroDeudaActivo.deudaProveedorId || ''} onChange={e => setCobroDeudaActivo({...cobroDeudaActivo, deudaProveedorId: e.target.value})} className="flex-1 bg-slate-950 border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                                    <option value="">¿A qué deuda de proveedor se descontó?</option>
+                                    {(db.deudas || []).map(d => <option key={d.id} value={d.id}>{d.acreedor} (Debés: {redondear(parseFloat(d.monto))} {d.moneda})</option>)}
+                                  </select>
+                                )}
+
+                                {cobroDeudaActivo.destinoTipo === 'externo' && (
+                                  <div className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-400 flex items-center">
+                                    Se descuenta de acá sin sumar saldo a tus billeteras.
+                                  </div>
+                                )}
                               </div>
+
                               <div className="flex gap-2">
-                                <button onClick={() => procesarCobroDeudaLibre(item)} className="flex-1 bg-indigo-600 text-white font-bold py-1.5 rounded-lg text-xs">Confirmar Ingreso</button>
-                                <button onClick={() => setCobroDeudaActivo({idDeuda: null, walletId: '', montoCobro: '', monedaCobro: 'ARS'})} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg font-bold text-xs">Cancelar</button>
+                                <button onClick={() => procesarCobroDeudaLibre(item)} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-1.5 rounded-lg text-xs transition">Confirmar Liquidación</button>
+                                <button onClick={() => setCobroDeudaActivo({idDeuda: null, destinoTipo: 'billetera', walletId: '', deudaProveedorId: '', imputacion: 'proporcional', montoCobro: '', monedaCobro: 'ARS'})} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg font-bold text-xs">Cancelar</button>
                               </div>
                             </div>
                           ) : (
                             <div className="flex justify-between items-center border-t border-slate-800/50 pt-2.5 flex-wrap gap-2">
-                              <div className="flex gap-1.5 items-center">
+                              <div className="flex gap-1.5 items-center flex-wrap">
                                 <button onClick={() => setEditandoDeudaCobrar({...item})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-pen"></i></button>
                                 <button onClick={() => eliminarDeudaCobrar(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 px-2.5 py-1 rounded-lg text-xs"><i className="fa-solid fa-trash"></i></button>
                                 <button onClick={() => setDesgloseCobrarId(desgloseCobrarId === item.id ? null : item.id)} className="bg-slate-900 hover:bg-slate-800 text-cyan-400 border border-cyan-500/30 px-2.5 py-1 rounded-lg text-xs font-bold transition">
@@ -4671,7 +5026,7 @@
                                   {copiadoId === `liq_${item.id}` ? '¡Copiado!' : 'Liquidación'}
                                 </button>
                               </div>
-                              <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, walletId: '', montoCobro: '', monedaCobro: monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-3 py-1.5 rounded-lg text-xs font-bold transition">Cobrar / Abonar</button>
+                              <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, destinoTipo: 'billetera', walletId: '', deudaProveedorId: '', imputacion: 'proporcional', montoCobro: '', monedaCobro: item.moneda || monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-3 py-1.5 rounded-lg text-xs font-bold transition">Cobrar / Abonar</button>
                             </div>
                           )}
 
@@ -4684,22 +5039,35 @@
                                 <p className="text-xs text-slate-500 py-2 text-center">Los próximos equipos o ventas que sumes a esta cuenta aparecerán detallados acá.</p>
                               ) : (
                                 <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                                  {item.movimientos.map((m, idxM) => (
-                                    <div key={m.id || idxM} className="bg-slate-950 border border-slate-800/80 rounded-lg p-2.5 flex justify-between items-center gap-2 text-xs">
-                                      <div className="min-w-0">
-                                        <p className="font-bold text-white truncate">{m.titulo} <span className="text-[10px] text-slate-500 font-mono ml-1">({m.fecha})</span></p>
-                                        <p className="text-[11px] text-slate-400 mt-0.5">{m.detalle}</p>
+                                  {item.movimientos.map((m, idxM) => {
+                                    const infoM = calcularDesgloseMovCobrar(item, m);
+                                    return (
+                                      <div key={m.id || idxM} className="bg-slate-950 border border-slate-800/80 rounded-lg p-2.5 flex justify-between items-center gap-2 text-xs">
+                                        <div className="min-w-0">
+                                          <p className="font-bold text-white truncate">{m.titulo} <span className="text-[10px] text-slate-500 font-mono ml-1">({m.fecha})</span></p>
+                                          <p className="text-[11px] text-slate-400 mt-0.5">{m.detalle}</p>
+                                          {!infoM.esAbono && infoM.repUSD > 0.01 && (
+                                            <div className="flex flex-wrap gap-1.5 mt-1 text-[10px] font-mono">
+                                              <span className="bg-amber-950/60 border border-amber-500/30 text-amber-300 px-1.5 py-0.2 rounded">
+                                                📦 Rep: {formatDinero(convertirParaMostrar(infoM.repUSD, 'USD', monedaVisual), monedaVisual)}
+                                              </span>
+                                              <span className="bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 px-1.5 py-0.2 rounded">
+                                                💰 Gna: {formatDinero(convertirParaMostrar(infoM.ganUSD, 'USD', monedaVisual), monedaVisual)}
+                                              </span>
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <span className={`font-mono font-black ${m.tipo === 'abono' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                            {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.monto !== undefined ? m.monto : m.montoUSD, m.moneda || 'USD', monedaVisual), monedaVisual)}
+                                          </span>
+                                          <button type="button" onClick={() => eliminarMovimientoCobrar(item, m, idxM)} className="bg-rose-950/80 hover:bg-rose-800 text-rose-400 hover:text-white w-6 h-6 rounded text-[10px] transition" title="Eliminar este movimiento y ajustar saldo">
+                                            <i className="fa-solid fa-trash"></i>
+                                          </button>
+                                        </div>
                                       </div>
-                                      <div className="flex items-center gap-2 shrink-0">
-                                        <span className={`font-mono font-black ${m.tipo === 'abono' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                          {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.monto !== undefined ? m.monto : m.montoUSD, m.moneda || 'USD', monedaVisual), monedaVisual)}
-                                        </span>
-                                        <button type="button" onClick={() => eliminarMovimientoCobrar(item, m, idxM)} className="bg-rose-950/80 hover:bg-rose-800 text-rose-400 hover:text-white w-6 h-6 rounded text-[10px] transition" title="Eliminar este movimiento y ajustar saldo">
-                                          <i className="fa-solid fa-trash"></i>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
