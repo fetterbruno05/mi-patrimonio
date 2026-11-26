@@ -177,7 +177,8 @@
         items: []
       });
 
-      const [nuevaVenta, setNuevaVenta] = useState({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
+      const [nuevaVenta, setNuevaVenta] = useState({ modelo: '', almacenamiento: '128GB', color: '', bateria: '100%', imei: '', precioVenta: '', precioVentaMoneda: 'USD', comisionPorUnidad: '20000', moneda: 'ARS', vendioCargador: false });
+      const [filtroVentas, setFiltroVentas] = useState('');
 
       const [nuevaReparacion, setNuevaReparacion] = useState({ origen: 'cliente', gremio: '', modelo: '', imei: '', clienteNombre: '', clienteTelefono: '', estadoVisual: '', falla: '', presupuesto: '', presupuestoMoneda: 'ARS', reparadoAntesIngreso: 'no', detalleReparadoIngreso: '' });
       const [mostrarInputGremioLibre, setMostrarInputGremioLibre] = useState(false);
@@ -856,6 +857,41 @@
         }
       };
 
+      const eliminarMovimientoCobrar = (itemDeuda, mov, idxMov) => {
+        const monDeuda = itemDeuda.moneda || 'USD';
+        const monMov = mov.moneda || 'USD';
+        const valMov = parseFloat(mov.monto !== undefined ? mov.monto : mov.montoUSD) || 0;
+        let valEnMonDeuda = valMov;
+        if (monMov === 'ARS' && monDeuda === 'USD') valEnMonDeuda = valMov / db.cotizacionDolar;
+        if (monMov === 'USD' && monDeuda === 'ARS') valEnMonDeuda = valMov * db.cotizacionDolar;
+
+        const esAbono = mov.tipo === 'abono';
+        const textoEfecto = esAbono
+          ? `Se volverá a SUMAR al saldo pendiente de "${itemDeuda.deudor}".`
+          : `Se RESTARÁ del saldo de "${itemDeuda.deudor}" (no borra el historial del taller).`;
+
+        if (!window.confirm(`¿Eliminar "${mov.titulo || 'este movimiento'}" del desglose?\n\n${textoEfecto}`)) return;
+
+        const saldoActual = parseFloat(itemDeuda.monto) || 0;
+        const nuevoSaldo = esAbono ? (saldoActual + valEnMonDeuda) : Math.max(0, saldoActual - valEnMonDeuda);
+        const movsRestantes = (itemDeuda.movimientos || []).filter((_, i) => i !== idxMov);
+        const umbralCierre = monDeuda === 'ARS' ? 10 : 0.05;
+
+        let deudasAc;
+        if (movsRestantes.length === 0 && nuevoSaldo <= umbralCierre) {
+          deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
+        } else {
+          deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? {
+            ...d,
+            monto: monDeuda === 'ARS' ? Math.round(nuevoSaldo) : redondear(nuevoSaldo),
+            movimientos: movsRestantes
+          } : d);
+        }
+
+        const log = generarLog('Eliminó Movimiento en Cuentas a Cobrar', `Quitó "${mov.titulo || 'movimiento'}" (${redondear(valMov)} ${monMov}) de "${itemDeuda.deudor}".`, mov);
+        guardarEnNube({ ...db, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+      };
+      
       const agregarStock = (e) => {
         e.preventDefault();
         if (!nuevoStock.concepto) return alert('Ingresá el concepto.');
@@ -1093,43 +1129,96 @@
 
       const registrarVenta = (e) => {
           e.preventDefault();
-          const cant = parseInt(nuevaVenta.cantidad) || 1;
+          if (!nuevaVenta.modelo.trim()) return alert('Ingresá el modelo del equipo vendido.');
+          if (nuevaVenta.imei.length !== 15) return alert('El IMEI debe tener exactamente 15 números.');
           const comiUnit = parseFloat(nuevaVenta.comisionPorUnidad) || 0;
-          const totalComi = cant * comiUnit;
-          if (totalComi <= 0) return alert('La comisión debe ser mayor a cero.');
-          const fechaHoy = new Date().toLocaleDateString();
+          const vendioCarg = !!nuevaVenta.vendioCargador;
+          const comiCargUSD = vendioCarg ? 5 : 0;
+          if (comiUnit <= 0 && !vendioCarg) return alert('La comisión debe ser mayor a cero.');
+
+          const fechaHoy = new Date().toLocaleDateString('es-AR');
           const tsNow = Date.now();
-          let ventasAc = [...(db.ventas || [])];
-          const idxVenta = ventasAc.findIndex(v => v.fecha === fechaHoy && v.moneda === nuevaVenta.moneda);
-          let regVenta;
-          if (idxVenta !== -1) {
-              ventasAc[idxVenta].cantidad = parseInt(ventasAc[idxVenta].cantidad) + cant;
-              ventasAc[idxVenta].totalComision = parseFloat(ventasAc[idxVenta].totalComision) + totalComi;
-              regVenta = ventasAc[idxVenta];
-          } else {
-              regVenta = { id: tsNow, fechaTimestamp: tsNow, fecha: fechaHoy, cantidad: cant, comisionUnitaria: comiUnit, totalComision: totalComi, moneda: nuevaVenta.moneda };
-              ventasAc.unshift(regVenta);
-          }
           const monVenta = nuevaVenta.moneda || 'ARS';
+          const precioVtaNum = parseFloat(nuevaVenta.precioVenta) || 0;
+          const precioVtaMon = nuevaVenta.precioVentaMoneda || 'USD';
+
+          const regVenta = {
+              id: tsNow,
+              fechaTimestamp: tsNow,
+              fecha: fechaHoy,
+              cantidad: 1,
+              modelo: nuevaVenta.modelo.trim(),
+              almacenamiento: (nuevaVenta.almacenamiento || '').trim(),
+              color: (nuevaVenta.color || '').trim(),
+              bateria: (nuevaVenta.bateria || '').trim(),
+              imei: nuevaVenta.imei.trim(),
+              precioVenta: precioVtaNum,
+              precioVentaMoneda: precioVtaMon,
+              comisionUnitaria: comiUnit,
+              totalComision: comiUnit,
+              moneda: monVenta,
+              vendioCargador: vendioCarg,
+              comisionCargadorUSD: comiCargUSD
+          };
+
+          const ventasAc = [regVenta, ...(db.ventas || [])];
           let deudasCobrarAc = [...(db.deudasCobrar || [])];
           const deudor = "Local / Negocio (Ventas)";
-          const motivo = "Comisiones de Venta de Equipos";
-          const movVenta = { id: Date.now() + 2, fecha: fechaHoy, titulo: `Venta de ${cant} ${cant === 1 ? 'equipo' : 'equipos'}`, detalle: `Comisión: $ ${totalComi.toLocaleString('es-AR')} ${monVenta}`, monto: totalComi, moneda: monVenta, tipo: 'cargo' };
-          const idxCobrar = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivo && d.moneda === monVenta);
-          if (idxCobrar !== -1) {
-              deudasCobrarAc[idxCobrar].monto = monVenta === 'ARS' ? Math.round(parseFloat(deudasCobrarAc[idxCobrar].monto) + totalComi) : redondear(parseFloat(deudasCobrarAc[idxCobrar].monto) + totalComi); 
-              deudasCobrarAc[idxCobrar].movimientos = [movVenta, ...(deudasCobrarAc[idxCobrar].movimientos || [])];
-          } else {
-              deudasCobrarAc.unshift({ id: Date.now() + 1, fechaTimestamp: Date.now(), deudor, motivo, monto: monVenta === 'ARS' ? Math.round(totalComi) : redondear(totalComi), moneda: monVenta, fecha: fechaHoy, movimientos: [movVenta] });
+
+          // 1. Comisión del equipo
+          if (comiUnit > 0) {
+              const motivoEq = "Comisiones de Venta de Equipos";
+              const infoPrecio = precioVtaNum > 0
+                ? (precioVtaMon === 'USD' ? ` • Venta: U$D ${precioVtaNum.toLocaleString('es-AR')}` : ` • Venta: $${Math.round(precioVtaNum).toLocaleString('es-AR')}`)
+                : '';
+              const movVenta = {
+                  id: tsNow + 2,
+                  fecha: fechaHoy,
+                  titulo: `${regVenta.modelo}${regVenta.almacenamiento ? ` ${regVenta.almacenamiento}` : ''}`,
+                  detalle: `Color: ${regVenta.color || '-'} • Bat: ${regVenta.bateria || '-'} • IMEI: ${regVenta.imei}${infoPrecio}`,
+                  monto: comiUnit,
+                  moneda: monVenta,
+                  tipo: 'cargo'
+              };
+              const idxCobrar = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoEq && d.moneda === monVenta);
+              if (idxCobrar !== -1) {
+                  deudasCobrarAc[idxCobrar].monto = monVenta === 'ARS' ? Math.round(parseFloat(deudasCobrarAc[idxCobrar].monto) + comiUnit) : redondear(parseFloat(deudasCobrarAc[idxCobrar].monto) + comiUnit);
+                  deudasCobrarAc[idxCobrar].movimientos = [movVenta, ...(deudasCobrarAc[idxCobrar].movimientos || [])];
+              } else {
+                  deudasCobrarAc.unshift({ id: tsNow + 1, fechaTimestamp: tsNow, deudor, motivo: motivoEq, monto: monVenta === 'ARS' ? Math.round(comiUnit) : redondear(comiUnit), moneda: monVenta, fecha: fechaHoy, movimientos: [movVenta] });
+              }
           }
-          const log = generarLog('Registró Venta', `Vendió ${cant} equipos. Sumó ${totalComi.toFixed(2)} ${nuevaVenta.moneda} a Cuentas a Cobrar.`, regVenta);
+
+          // 2. Comisión de Cargador (FIJADA EN U$D 5 USD)
+          if (vendioCarg) {
+              const motivoCarg = "Comisiones de Cargadores (Fijado en USD)";
+              const movCarg = {
+                  id: tsNow + 4,
+                  fecha: fechaHoy,
+                  titulo: `Cargador (${regVenta.modelo})`,
+                  detalle: `IMEI equipo: ${regVenta.imei} • Comisión fija en dólares`,
+                  monto: 5,
+                  moneda: 'USD',
+                  tipo: 'cargo'
+              };
+              const idxCarg = deudasCobrarAc.findIndex(d => d.deudor === deudor && d.motivo === motivoCarg && d.moneda === 'USD');
+              if (idxCarg !== -1) {
+                  deudasCobrarAc[idxCarg].monto = redondear(parseFloat(deudasCobrarAc[idxCarg].monto) + 5);
+                  deudasCobrarAc[idxCarg].movimientos = [movCarg, ...(deudasCobrarAc[idxCarg].movimientos || [])];
+              } else {
+                  deudasCobrarAc.unshift({ id: tsNow + 3, fechaTimestamp: tsNow, deudor, motivo: motivoCarg, monto: 5, moneda: 'USD', fecha: fechaHoy, movimientos: [movCarg] });
+              }
+          }
+
+          const log = generarLog('Registró Venta', `Vendió ${regVenta.modelo} ${regVenta.almacenamiento} (IMEI: ${regVenta.imei}). Comisión: ${comiUnit} ${monVenta}${vendioCarg ? ' + U$D 5 (Cargador)' : ''}.`, regVenta);
           guardarEnNube({ ...db, ventas: ventasAc, deudasCobrar: deudasCobrarAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
-          setNuevaVenta({ cantidad: '1', comisionPorUnidad: '20000', moneda: 'ARS' });
+          setNuevaVenta({ modelo: '', almacenamiento: '128GB', color: '', bateria: '100%', imei: '', precioVenta: '', precioVentaMoneda: 'USD', comisionPorUnidad: nuevaVenta.comisionPorUnidad, moneda: monVenta, vendioCargador: false });
       };
 
       const eliminarRegistroVenta = (itemVenta) => {
-          if (window.confirm("¿Seguro querés eliminar TODAS las ventas de este día? Esto NO restará la plata de tus Cuentas por Cobrar.")) {
-              const log = generarLog('Eliminó Registro de Venta', `Borró el historial de ventas del día ${itemVenta.fecha}.`);
+          const etiqueta = itemVenta.modelo ? `${itemVenta.modelo} (${itemVenta.fecha})` : `del día ${itemVenta.fecha}`;
+          if (window.confirm(`¿Seguro querés eliminar el registro de venta ${etiqueta}? Esto NO restará la plata de tus Cuentas por Cobrar.`)) {
+              const log = generarLog('Eliminó Registro de Venta', `Borró el historial de venta ${etiqueta}.`);
               guardarEnNube({ ...db, ventas: db.ventas.filter(v => v.id !== itemVenta.id), actividad: [log, ...(db.actividad || [])].slice(0, 500) });
           }
       };
@@ -1391,15 +1480,15 @@
               doc.setFontSize(8);
               doc.setTextColor(100, 116, 139);
               doc.text('ANTECEDENTES DE REPARACIÓN PREVIA (DECLARADO AL INGRESO)', 15, y);
-              doc.setFont('helvetica', item.reparadoAntesIngreso === 'si' ? 'bold' : 'normal');
-              doc.setFontSize(9);
-              const prevLines = doc.splitTextToSize(txtPrev, 170);
-              const prevH = Math.max(11, prevLines.length * 4.8 + 6);
+              doc.setFont('helvetica', 'normal');
+              doc.setFontSize(8.8);
+              const prevLines = doc.splitTextToSize(txtPrev, 166);
+              const prevH = Math.max(11, prevLines.length * 4.5 + 6);
               doc.setFillColor(item.reparadoAntesIngreso === 'si' ? 255 : 248, item.reparadoAntesIngreso === 'si' ? 251 : 250, item.reparadoAntesIngreso === 'si' ? 235 : 252);
               doc.setDrawColor(item.reparadoAntesIngreso === 'si' ? 252 : 226, item.reparadoAntesIngreso === 'si' ? 211 : 232, item.reparadoAntesIngreso === 'si' ? 77 : 240);
               doc.roundedRect(15, y + 2.5, 180, prevH, 2.5, 2.5, 'FD');
               doc.setTextColor(item.reparadoAntesIngreso === 'si' ? 146 : 51, item.reparadoAntesIngreso === 'si' ? 64 : 65, item.reparadoAntesIngreso === 'si' ? 14 : 85);
-              doc.text(prevLines, 19, y + 8);
+              doc.text(txtPrev, 21, y + 8, { maxWidth: 166, align: 'justify' });
               y += prevH + 9;
           }
           if (item.origen === 'cliente') {
@@ -1423,21 +1512,23 @@
               '2. El taller no se responsabiliza por pérdida de datos o configuraciones; se recomienda realizar copia de seguridad antes de dejar el equipo.',
               '3. Para retirar el equipo será necesario presentar este comprobante o acreditar titularidad.'
           ].join('\n');
-          const condLines = doc.splitTextToSize(textoCond, 168);
-          const condH = condLines.length * 4.8 + 14;
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.2);
+          const condLines = doc.splitTextToSize(textoCond, 164);
+          const condH = condLines.length * 4.5 + 16;
           doc.setFillColor(248, 250, 252);
           doc.setDrawColor(226, 232, 240);
           doc.roundedRect(15, yCond, 180, condH, 2.5, 2.5, 'FD');
           doc.setFillColor(107, 33, 168);
           doc.rect(15, yCond, 2.5, condH, 'F');
           doc.setFont('helvetica', 'bold');
-          doc.setFontSize(8.5);
+          doc.setFontSize(8.8);
           doc.setTextColor(71, 85, 105);
-          doc.text('CONDICIONES DE RECEPCIÓN', 22, yCond + 7);
+          doc.text('CONDICIONES DE RECEPCIÓN', 105, yCond + 7.5, { align: 'center' });
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.2);
           doc.setTextColor(100, 116, 139);
-          doc.text(condLines, 22, yCond + 13);
+          doc.text(condLines, 23, yCond + 14);
 
           // FIRMA CURSIVA ESTILO LAPICERA NEGRA SOBRE LA LÍNEA
           doc.setFont('times', 'italic');
@@ -1608,15 +1699,15 @@
               doc.setFontSize(8);
               doc.setTextColor(fueAbierto ? 180 : 100, fueAbierto ? 83 : 116, fueAbierto ? 9 : 139);
               doc.text('INFORME TÉCNICO DE APERTURA INTERNA', 15, y);
-              doc.setFont('helvetica', fueAbierto ? 'bold' : 'normal');
+              doc.setFont('helvetica', 'normal');
               doc.setFontSize(8.8);
-              const halLines = doc.splitTextToSize(txtHallazgo, 170);
-              const halH = Math.max(11, halLines.length * 4.8 + 6);
+              const halLines = doc.splitTextToSize(txtHallazgo, 166);
+              const halH = Math.max(11, halLines.length * 4.5 + 6);
               doc.setFillColor(fueAbierto ? 255 : 248, fueAbierto ? 251 : 250, fueAbierto ? 235 : 252);
               doc.setDrawColor(fueAbierto ? 251 : 226, fueAbierto ? 191 : 232, fueAbierto ? 36 : 240);
               doc.roundedRect(15, y + 2.5, 180, halH, 2.5, 2.5, 'FD');
               doc.setTextColor(fueAbierto ? 146 : 51, fueAbierto ? 64 : 65, fueAbierto ? 14 : 85);
-              doc.text(halLines, 19, y + 8);
+              doc.text(txtHallazgo, 21, y + 8, { maxWidth: 166, align: 'justify' });
               y += halH + 8;
           }
           // IMPORTE TOTAL
@@ -1652,8 +1743,10 @@
               bgR = 240; bgG = 253; bgB = 250; brR = 94; brG = 234; brB = 212; acR = 15; acG = 118; acB = 110;
           }
 
-          const clLines = doc.splitTextToSize(clausulaTxt, 168);
-          const gtiaH = clLines.length * 4.8 + 24;
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          const clLines = doc.splitTextToSize(clausulaTxt, 164);
+          const gtiaH = clLines.length * 4.5 + 27;
           doc.setFillColor(bgR, bgG, bgB);
           doc.setDrawColor(brR, brG, brB);
           doc.roundedRect(15, y, 180, gtiaH, 3, 3, 'FD');
@@ -1663,15 +1756,20 @@
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(10.5);
           doc.setTextColor(acR, acG, acB);
-          doc.text(tituloGtia, 22, y + 8.5);
+          doc.text(tituloGtia, 105, y + 8.5, { align: 'center' });
           doc.setFont('helvetica', 'bold');
-          doc.setFontSize(9);
+          doc.setFontSize(8.8);
           doc.setTextColor(30, 41, 59);
-          doc.text(vigenciaTxt, 22, y + 14.5);
+          doc.text(vigenciaTxt, 105, y + 14.2, { align: 'center' });
+
+          doc.setDrawColor(brR, brG, brB);
+          doc.setLineWidth(0.25);
+          doc.line(23, y + 17.5, 187, y + 17.5);
+
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.5);
           doc.setTextColor(71, 85, 105);
-          doc.text(clLines, 22, y + 21);
+          doc.text(clausulaTxt, 23, y + 23, { maxWidth: 164, align: 'justify' });
 
           // FIRMA CURSIVA ESTILO LAPICERA NEGRA SOBRE LA LÍNEA
           doc.setFont('times', 'italic');
@@ -2218,7 +2316,7 @@
           (db.ventas || []).forEach(v => {
               const ts = obtenerTs(v);
               if (ts >= desdeTs && ts <= hastaTs) {
-                  ganVentasUSD += aUSDBase(v.totalComision, v.moneda, db.cotizacionDolar);
+                  ganVentasUSD += aUSDBase(v.totalComision, v.moneda, db.cotizacionDolar) + (parseFloat(v.comisionCargadorUSD) || 0);
                   cantEquiposVendidos += (parseInt(v.cantidad) || 0);
               }
           });
@@ -2340,10 +2438,13 @@
       const dayOfWeek = now.getDay() || 7;
       const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1).getTime();
 
-      let tVtasHistUSD = 0; let tVtasMesUSD = 0; let tVtasSemUSD = 0; let tEqVend = 0;
+      let tVtasHistUSD = 0; let tVtasMesUSD = 0; let tVtasSemUSD = 0; let tEqVend = 0; let tCargVend = 0;
       (db.ventas || []).forEach(item => {
-          const usd = item.moneda === 'USD' ? parseFloat(item.totalComision) : parseFloat(item.totalComision) / db.cotizacionDolar;
-          tVtasHistUSD += usd; tEqVend += parseInt(item.cantidad);
+          const baseUSD = item.moneda === 'USD' ? parseFloat(item.totalComision) : parseFloat(item.totalComision) / db.cotizacionDolar;
+          const usd = baseUSD + (parseFloat(item.comisionCargadorUSD) || 0);
+          tVtasHistUSD += usd;
+          tEqVend += parseInt(item.cantidad) || 1;
+          if (item.vendioCargador) tCargVend += 1;
           let ts = item.fechaTimestamp;
           if (!ts && item.fecha) { const p = item.fecha.split('/'); if(p.length===3) ts = new Date(p[2], p[1]-1, p[0]).getTime(); }
           if (ts >= startOfMonth) tVtasMesUSD += usd;
@@ -3016,46 +3117,141 @@
                     <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/30 rounded-2xl p-3.5 sm:p-4 shadow-lg text-center">
                       <p className="text-[9px] sm:text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-sack-dollar mr-1"></i>Histórico</p>
                       <h2 className="text-base sm:text-2xl font-black text-white truncate">{formatDinero(convertirParaMostrar(tVtasHistUSD, 'USD'))}</h2>
-                      <p className="text-slate-400 text-[9px] font-mono mt-0.5">({tEqVend} eq.)</p>
+                      <p className="text-slate-400 text-[9px] font-mono mt-0.5">({tEqVend} eq.{tCargVend > 0 ? ` • ${tCargVend} carg.` : ''})</p>
                     </div>
                   </div>
 
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
-                    <div className="border-b border-slate-800 pb-2.5">
-                      <h3 className="text-sm font-bold text-white">Registrar Ventas del Día</h3>
+                    <div className="border-b border-slate-800 pb-2.5 flex justify-between items-center gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-white">Registrar Venta de Equipo</h3>
+                        <p className="text-[11px] text-slate-400">Cargá los datos del equipo vendido y si incluiste cargador (+U$D 5 fijos).</p>
+                      </div>
                     </div>
-                    <form onSubmit={registrarVenta} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                      <div>
-                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Equipos Vendidos Hoy</label>
-                          <input type="number" min="1" required value={nuevaVenta.cantidad} onChange={e => setNuevaVenta({...nuevaVenta, cantidad: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-center text-sm" />
+
+                    <form onSubmit={registrarVenta} className="bg-slate-950 p-3.5 sm:p-4 rounded-xl border border-slate-800 space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                        <div className="sm:col-span-5">
+                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Modelo del Equipo *</label>
+                          <input type="text" required placeholder="Ej: iPhone 15 Pro" value={nuevaVenta.modelo} onChange={e => setNuevaVenta({...nuevaVenta, modelo: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-emerald-500" />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Capacidad</label>
+                          <select value={nuevaVenta.almacenamiento} onChange={e => setNuevaVenta({...nuevaVenta, almacenamiento: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white text-xs font-bold focus:outline-none focus:border-emerald-500">
+                            <option value="64GB">64GB</option>
+                            <option value="128GB">128GB</option>
+                            <option value="256GB">256GB</option>
+                            <option value="512GB">512GB</option>
+                            <option value="1TB">1TB</option>
+                            <option value="2TB">2TB</option>
+                          </select>
+                        </div>
+                        <div className="sm:col-span-3">
+                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Color</label>
+                          <input type="text" required placeholder="Ej: Titanio Natural" value={nuevaVenta.color} onChange={e => setNuevaVenta({...nuevaVenta, color: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-emerald-500" />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Batería</label>
+                          <input type="text" required placeholder="100% / Sellado" value={nuevaVenta.bateria} onChange={e => setNuevaVenta({...nuevaVenta, bateria: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-xs text-center focus:outline-none focus:border-emerald-500" />
+                        </div>
                       </div>
-                      <div>
-                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Comisión por Equipo</label>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                        <div className="sm:col-span-4">
+                          <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">IMEI (15 números) *</label>
+                          <input type="text" maxLength="15" required placeholder="15 dígitos" value={nuevaVenta.imei} onChange={e => setNuevaVenta({...nuevaVenta, imei: e.target.value.replace(/\D/g, '')})} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-emerald-500" />
+                        </div>
+                        <div className="sm:col-span-4">
+                          <label className="text-[10px] text-cyan-400 font-bold uppercase block mb-1">Precio de Venta al Cliente</label>
                           <div className="flex">
-                              <input type="number" step="any" required value={nuevaVenta.comisionPorUnidad} onChange={e => setNuevaVenta({...nuevaVenta, comisionPorUnidad: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono text-xs" />
-                              <select value={nuevaVenta.moneda} onChange={e => setNuevaVenta({...nuevaVenta, moneda: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-r-xl px-2.5 py-2 text-white text-xs font-bold border-l-0"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                            <input type="number" step="any" required placeholder="Ej: 750" value={nuevaVenta.precioVenta} onChange={e => setNuevaVenta({...nuevaVenta, precioVenta: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-l-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-cyan-500" />
+                            <select value={nuevaVenta.precioVentaMoneda} onChange={e => setNuevaVenta({...nuevaVenta, precioVentaMoneda: e.target.value})} className="bg-slate-900 border border-slate-700 border-l-0 rounded-r-xl px-2.5 py-2 text-white text-xs font-bold"><option value="USD">USD</option><option value="ARS">ARS</option></select>
                           </div>
+                        </div>
+                        <div className="sm:col-span-4">
+                          <label className="text-[10px] text-emerald-400 font-bold uppercase block mb-1">Tu Comisión por el Equipo</label>
+                          <div className="flex">
+                            <input type="number" step="any" required value={nuevaVenta.comisionPorUnidad} onChange={e => setNuevaVenta({...nuevaVenta, comisionPorUnidad: e.target.value})} className="w-full min-w-0 bg-slate-900 border border-emerald-500/40 rounded-l-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-emerald-500" />
+                            <select value={nuevaVenta.moneda} onChange={e => setNuevaVenta({...nuevaVenta, moneda: e.target.value})} className="bg-slate-900 border border-emerald-500/40 border-l-0 rounded-r-xl px-2.5 py-2 text-white text-xs font-bold"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+                          </div>
+                        </div>
                       </div>
-                      <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl transition text-xs h-[36px]">Sumar a "Por Cobrar"</button>
+
+                      {/* PREGUNTA DE VENTA DE CARGADOR (+5 USD FIJOS) */}
+                      <div className={`rounded-xl p-3 border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 transition ${nuevaVenta.vendioCargador ? 'bg-amber-950/30 border-amber-500/60' : 'bg-slate-900 border-slate-800'}`}>
+                        <div>
+                          <p className="text-xs font-black text-white flex items-center gap-1.5">
+                            <i className="fa-solid fa-plug-circle-bolt text-amber-400"></i>¿Vendiste cargador con este equipo?
+                          </p>
+                          <p className="text-[10px] text-slate-400">Suma comisión extra fija de <strong className="text-amber-400">U$D 5,00 USD</strong> en Cuentas a Cobrar.</p>
+                        </div>
+                        <div className="flex gap-2 w-full sm:w-auto">
+                          <button type="button" onClick={() => setNuevaVenta({...nuevaVenta, vendioCargador: false})} className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-lg text-xs font-bold border transition ${!nuevaVenta.vendioCargador ? 'bg-slate-700 text-white border-slate-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                            No
+                          </button>
+                          <button type="button" onClick={() => setNuevaVenta({...nuevaVenta, vendioCargador: true})} className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-lg text-xs font-black border transition ${nuevaVenta.vendioCargador ? 'bg-amber-600 text-white border-amber-400 shadow-md' : 'bg-slate-950 text-amber-400 border-amber-500/40 hover:bg-slate-800'}`}>
+                            ⚡ Sí, con cargador (+U$D 5)
+                          </button>
+                        </div>
+                      </div>
+
+                      <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-2.5 px-4 rounded-xl transition text-xs shadow-md">
+                        Registrar Venta y Sumar a "Por Cobrar" {nuevaVenta.vendioCargador ? '(Equipo + U$D 5 Cargador)' : ''}
+                      </button>
                     </form>
 
                     <div className="space-y-2.5 pt-2">
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">Registro Histórico (Agrupado por día)</h4>
-                      {(db.ventas || []).length === 0 ? <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Vacío.</p> : (db.ventas || []).map(item => (
-                        <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 flex justify-between items-center gap-3">
-                          <div>
-                            <p className="font-black text-white text-sm">{item.fecha}</p>
-                            <p className="text-xs text-slate-500">Vendidos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="text-right">
-                              <p className="text-[9px] text-slate-500 font-bold uppercase">Total del día</p>
-                              <span className="font-mono font-black text-emerald-500 text-base sm:text-lg">+{formatDinero(convertirParaMostrar(item.totalComision, item.moneda))}</span>
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-2">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Registro Histórico de Ventas ({(db.ventas || []).length})</h4>
+                        <input type="text" placeholder="Buscar por modelo, IMEI, color, fecha..." value={filtroVentas} onChange={e => setFiltroVentas(e.target.value)} className="w-full sm:w-64 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-emerald-500" />
+                      </div>
+                      {(() => {
+                        const q = filtroVentas.toLowerCase().trim();
+                        const ventasVisibles = (db.ventas || []).filter(v => !q || (v.modelo || '').toLowerCase().includes(q) || (v.imei || '').includes(q) || (v.color || '').toLowerCase().includes(q) || (v.fecha || '').includes(q) || (q.includes('carg') && v.vendioCargador));
+                        if (ventasVisibles.length === 0) return <p className="text-center text-slate-500 py-5 text-xs font-bold border-2 border-dashed border-slate-800 rounded-xl">Sin registros para mostrar.</p>;
+                        return ventasVisibles.map(item => {
+                          const comiEqUSD = aUSDBase(item.totalComision, item.moneda, db.cotizacionDolar);
+                          const comiCargUSD = parseFloat(item.comisionCargadorUSD) || 0;
+                          const totalComiUSD = comiEqUSD + comiCargUSD;
+                          return (
+                            <div key={item.id} className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 hover:border-slate-700 transition">
+                              <div className="min-w-0 flex-1">
+                                {item.modelo ? (
+                                  <>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <p className="font-black text-white text-sm">{item.modelo} {item.almacenamiento}</p>
+                                      {item.color && <span className="bg-slate-900 border border-slate-700 text-slate-300 px-2 py-0.5 rounded text-[10px] font-bold">{item.color}</span>}
+                                      {item.bateria && <span className="bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 px-2 py-0.5 rounded text-[10px] font-mono font-bold"><i className="fa-solid fa-battery-full mr-1"></i>{item.bateria}</span>}
+                                      {item.vendioCargador && <span className="bg-amber-950 border border-amber-500/50 text-amber-300 px-2 py-0.5 rounded text-[10px] font-black"><i className="fa-solid fa-bolt mr-1"></i>+Cargador (U$D 5)</span>}
+                                    </div>
+                                    <div className="flex items-center gap-3 text-[11px] text-slate-400 font-mono mt-1 flex-wrap">
+                                      <span>{item.fecha}</span>
+                                      {item.imei && <span>• IMEI: <strong className="text-slate-300">{item.imei}</strong></span>}
+                                      {item.precioVenta > 0 && <span>• Venta: <strong className="text-cyan-400">{item.precioVentaMoneda === 'USD' ? `U$D ${parseFloat(item.precioVenta).toLocaleString('es-AR')}` : `$ ${Math.round(parseFloat(item.precioVenta)).toLocaleString('es-AR')} ARS`}</strong></span>}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="font-black text-white text-sm">{item.fecha}</p>
+                                    <p className="text-xs text-slate-500">Vendidos: <span className="font-bold text-emerald-400">{item.cantidad} equipos</span></p>
+                                  </>
+                                )}
+                              </div>
+
+                              <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto border-t sm:border-t-0 border-slate-800/60 pt-2 sm:pt-0 shrink-0">
+                                <div className="text-left sm:text-right">
+                                  <p className="text-[9px] text-slate-500 font-bold uppercase">Tu Comisión Total</p>
+                                  <span className="font-mono font-black text-emerald-400 text-base">+{formatDinero(convertirParaMostrar(totalComiUSD, 'USD'))}</span>
+                                  {item.vendioCargador && !modoPrivado && (
+                                    <p className="text-[9px] text-amber-400 font-mono">Eq: {item.totalComision} {item.moneda} + U$D 5 carg.</p>
+                                  )}
+                                </div>
+                                <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg text-xs transition-colors"><i className="fa-solid fa-trash"></i></button>
+                              </div>
                             </div>
-                            <button onClick={() => eliminarRegistroVenta(item)} className="bg-rose-950 hover:bg-rose-900 text-rose-400 w-8 h-8 rounded-lg text-xs transition-colors"><i className="fa-solid fa-trash"></i></button>
-                          </div>
-                        </div>
-                      ))}
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -4114,9 +4310,14 @@
                                         <p className="font-bold text-white truncate">{m.titulo} <span className="text-[10px] text-slate-500 font-mono ml-1">({m.fecha})</span></p>
                                         <p className="text-[11px] text-slate-400 mt-0.5">{m.detalle}</p>
                                       </div>
-                                      <span className={`font-mono font-black shrink-0 ${m.tipo === 'abono' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <span className={`font-mono font-black ${m.tipo === 'abono' ? 'text-rose-400' : 'text-emerald-400'}`}>
                                           {m.tipo === 'abono' ? '-' : '+'}{formatDinero(convertirParaMostrar(m.monto !== undefined ? m.monto : m.montoUSD, m.moneda || 'USD', monedaVisual), monedaVisual)}
                                         </span>
+                                        <button type="button" onClick={() => eliminarMovimientoCobrar(item, m, idxM)} className="bg-rose-950/80 hover:bg-rose-800 text-rose-400 hover:text-white w-6 h-6 rounded text-[10px] transition" title="Eliminar este movimiento y ajustar saldo">
+                                          <i className="fa-solid fa-trash"></i>
+                                        </button>
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
