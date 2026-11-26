@@ -939,7 +939,26 @@
           id: Date.now(),
           fecha: new Date().toLocaleDateString(),
           titulo: tituloDestino,
-          detalle: `Monto: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`, monto: abonoConvertido, moneda: monedaDeuda, imputacion: imp, tipo: 'abono' };  let deudasAc = []; const umbralCierre = monedaDeuda === 'ARS' ? 10 : 0.05; if (nvoMonto <= umbralCierre) deudasAc = (db.deudasCobrar \vert{}\vert{} []).filter(d => d.id !== itemDeuda.id); else deudasAc = (db.deudasCobrar \vert{}\vert{} []).map(d => d.id === itemDeuda.id ? { ...d, monto: monedaDeuda === 'ARS' ? Math.round(nvoMonto) : redondear(nvoMonto), movimientos: [movAbono, ...(d.movimientos \vert{}\vert{} [])] } : d);  const log = generarLog('Registró Cobro', `Liquidó ${cobroFisico} ${cobroDeudaActivo.monedaCobro}${etqImp} de "${itemDeuda.deudor}". ${textoLogDestino}.`);
+          detalle: `Monto: ${cobroFisico} ${cobroDeudaActivo.monedaCobro}`,
+          monto: abonoConvertido,
+          moneda: monedaDeuda,
+          imputacion: imp,
+          tipo: 'abono'
+        };
+
+        let deudasAc = [];
+        const umbralCierre = monedaDeuda === 'ARS' ? 10 : 0.05;
+        if (nvoMonto <= umbralCierre) {
+          deudasAc = (db.deudasCobrar || []).filter(d => d.id !== itemDeuda.id);
+        } else {
+          deudasAc = (db.deudasCobrar || []).map(d => d.id === itemDeuda.id ? {
+            ...d,
+            monto: monedaDeuda === 'ARS' ? Math.round(nvoMonto) : redondear(nvoMonto),
+            movimientos: [movAbono, ...(d.movimientos || [])]
+          } : d);
+        }
+
+        const log = generarLog('Registró Cobro', `Liquidó ${cobroFisico} ${cobroDeudaActivo.monedaCobro}${etqImp} de "${itemDeuda.deudor}". ${textoLogDestino}.`);
         guardarEnNube({ ...db, activos: activosAc, deudas: deudasPagarAc, deudasCobrar: deudasAc, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
         setCobroDeudaActivo({ idDeuda: null, destinoTipo: 'billetera', walletId: '', deudaProveedorId: '', imputacion: 'proporcional', montoCobro: '', monedaCobro: 'ARS' });
       };
