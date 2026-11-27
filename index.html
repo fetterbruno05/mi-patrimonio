@@ -117,6 +117,9 @@
       const [db, setDb] = useState(DB_TEMPLATE);
       const [vista, setVista] = useState('patrimonio'); 
       const [menuAbierto, setMenuAbierto] = useState(false);
+      const [estadoSync, setEstadoSync] = useState('conectado');
+      const versionLocalRef = useRef(0);
+      const guardandoLocalRef = useRef(false);
 
       const [bloqueoCotizacion, setBloqueoCotizacion] = useState(false);
       const [cotizacionDiariaInput, setCotizacionDiariaInput] = useState('');
@@ -241,6 +244,54 @@
       const opcionesProveedores = useMemo(() => [...new Set(db.historiaProveedores || ['Proveedor Principal'])], [db.historiaProveedores]);
       const billeterasDisponibles = useMemo(() => (db.activos || []).filter(a => a.tipo !== 'activo'), [db.activos]);
 
+      const normalizarPayloadNube = (payload) => ({
+        cotizacionDolar: payload.cotizacionDolar || 1500,
+        fechaUltimaCotizacion: payload.fechaUltimaCotizacion || '',
+        tsUltimaCotizacion: payload.tsUltimaCotizacion || 0,
+        tsUltimoBackup: payload.tsUltimoBackup || 0,
+        ultimaModificacionTs: payload.ultimaModificacionTs || 0,
+        activos: Array.isArray(payload.activos) ? payload.activos.filter(Boolean) : [],
+        gastosFijos: Array.isArray(payload.gastosFijos) ? payload.gastosFijos.filter(Boolean) : [],
+        gastosPuntuales: Array.isArray(payload.gastosPuntuales) ? payload.gastosPuntuales.filter(Boolean) : [],
+        deudas: Array.isArray(payload.deudas) ? payload.deudas.filter(Boolean) : [],
+        deudasCobrar: Array.isArray(payload.deudasCobrar) ? payload.deudasCobrar.filter(Boolean) : [],
+        stock: Array.isArray(payload.stock) ? payload.stock.filter(Boolean).map(s => {
+            if (s.moneda === 'ARS') {
+                const cotiRef = payload.cotizacionDolar || 1500;
+                return { ...s, monto: Math.round(((parseFloat(s.monto) / cotiRef) + Number.EPSILON) * 100) / 100, moneda: 'USD' };
+            }
+            return s;
+        }) : [],
+        ventas: Array.isArray(payload.ventas) ? payload.ventas.filter(Boolean) : [],
+        taller: Array.isArray(payload.taller) ? payload.taller.filter(Boolean) : [],
+        reparacionesFin: Array.isArray(payload.reparacionesFin) ? payload.reparacionesFin.filter(Boolean) : [],
+        rmaProveedores: Array.isArray(payload.rmaProveedores) ? payload.rmaProveedores.filter(Boolean) : [],
+        historiaConceptos: Array.isArray(payload.historiaConceptos) ? payload.historiaConceptos : [],
+        historiaStock: Array.isArray(payload.historiaStock) ? payload.historiaStock : [],
+        historiaGremios: Array.isArray(payload.historiaGremios) ? payload.historiaGremios : ['iConnecture'],
+        historiaMetodosPago: Array.isArray(payload.historiaMetodosPago) ? payload.historiaMetodosPago : ['Efectivo', 'Transferencia'],
+        historiaProveedores: Array.isArray(payload.historiaProveedores) ? payload.historiaProveedores : ['Proveedor Principal'],
+        bonosVentasAcreditados: payload.bonosVentasAcreditados && typeof payload.bonosVentasAcreditados === 'object' ? payload.bonosVentasAcreditados : {},
+        actividad: Array.isArray(payload.actividad) ? payload.actividad.filter(Boolean) : []
+      });
+
+      const sincronizarDesdeNube = async (mostrarAviso = false) => {
+        if (!supaClient || guardandoLocalRef.current) return;
+        try {
+          const { data, error } = await supaClient.from('iconnecture_data').select('payload').eq('id', 1).single();
+          if (error || !data || !data.payload) return;
+          const tsRemoto = data.payload.ultimaModificacionTs || 0;
+          if (tsRemoto > versionLocalRef.current || mostrarAviso) {
+            versionLocalRef.current = tsRemoto;
+            setDb(normalizarPayloadNube(data.payload));
+            setEstadoSync('actualizado');
+            setTimeout(() => setEstadoSync(prev => (prev === 'actualizado' ? 'conectado' : prev)), 2500);
+          }
+        } catch (err) {
+          console.error('Error al sincronizar:', err);
+        }
+      };
+
       useEffect(() => {
         async function fetchNube() {
           if (!supaClient) { setIsLoaded(true); return; }
@@ -248,35 +299,7 @@
             const { data, error } = await supaClient.from('iconnecture_data').select('payload').eq('id', 1).single();
             if (error) throw error;
             if (data && data.payload) {
-              const baseCargada = {
-                cotizacionDolar: data.payload.cotizacionDolar || 1500,
-                fechaUltimaCotizacion: data.payload.fechaUltimaCotizacion || '',
-                tsUltimaCotizacion: data.payload.tsUltimaCotizacion || 0,
-                tsUltimoBackup: data.payload.tsUltimoBackup || 0,
-                activos: Array.isArray(data.payload.activos) ? data.payload.activos.filter(Boolean) : [],
-                gastosFijos: Array.isArray(data.payload.gastosFijos) ? data.payload.gastosFijos.filter(Boolean) : [],
-                gastosPuntuales: Array.isArray(data.payload.gastosPuntuales) ? data.payload.gastosPuntuales.filter(Boolean) : [],
-                deudas: Array.isArray(data.payload.deudas) ? data.payload.deudas.filter(Boolean) : [],
-                deudasCobrar: Array.isArray(data.payload.deudasCobrar) ? data.payload.deudasCobrar.filter(Boolean) : [],
-                stock: Array.isArray(data.payload.stock) ? data.payload.stock.filter(Boolean).map(s => {
-                    if (s.moneda === 'ARS') {
-                        const cotiRef = data.payload.cotizacionDolar || 1500;
-                        return { ...s, monto: Math.round(((parseFloat(s.monto) / cotiRef) + Number.EPSILON) * 100) / 100, moneda: 'USD' };
-                    }
-                    return s;
-                }) : [],
-                ventas: Array.isArray(data.payload.ventas) ? data.payload.ventas.filter(Boolean) : [],
-                taller: Array.isArray(data.payload.taller) ? data.payload.taller.filter(Boolean) : [],
-                reparacionesFin: Array.isArray(data.payload.reparacionesFin) ? data.payload.reparacionesFin.filter(Boolean) : [], 
-                rmaProveedores: Array.isArray(data.payload.rmaProveedores) ? data.payload.rmaProveedores.filter(Boolean) : [],
-                historiaConceptos: Array.isArray(data.payload.historiaConceptos) ? data.payload.historiaConceptos : [],
-                historiaStock: Array.isArray(data.payload.historiaStock) ? data.payload.historiaStock : [],
-                historiaGremios: Array.isArray(data.payload.historiaGremios) ? data.payload.historiaGremios : ['iConnecture'],
-                historiaMetodosPago: Array.isArray(data.payload.historiaMetodosPago) ? data.payload.historiaMetodosPago : ['Efectivo', 'Transferencia'],
-                historiaProveedores: Array.isArray(data.payload.historiaProveedores) ? data.payload.historiaProveedores : ['Proveedor Principal'],
-                bonosVentasAcreditados: data.payload.bonosVentasAcreditados && typeof data.payload.bonosVentasAcreditados === 'object' ? data.payload.bonosVentasAcreditados : {},
-                actividad: Array.isArray(data.payload.actividad) ? data.payload.actividad.filter(Boolean) : []
-              };
+              const baseCargada = normalizarPayloadNube(data.payload);
               const ahoraTs = Date.now();
               const dHoy = new Date();
               const hoyISO = `${dHoy.getFullYear()}-${String(dHoy.getMonth() + 1).padStart(2, '0')}-${String(dHoy.getDate()).padStart(2, '0')}`;
@@ -322,9 +345,11 @@
                 if (logsInteres.length > 0) {
                   baseCargada.actividad = [...logsInteres, ...(baseCargada.actividad || [])].slice(0, 500);
                 }
+                baseCargada.ultimaModificacionTs = Date.now();
                 await supaClient.from('iconnecture_data').update({ payload: baseCargada }).eq('id', 1);
               }
 
+              versionLocalRef.current = baseCargada.ultimaModificacionTs || 0;
               setDb(baseCargada);
               if (colaRevision.length > 0) setRevisionTnaCola(colaRevision);
 
@@ -340,13 +365,85 @@
           setIsLoaded(true);
         }
         fetchNube();
+
+        // 1. CANAL TIEMPO REAL (SUPABASE REALTIME)
+        let canalRealtime = null;
+        if (supaClient) {
+          canalRealtime = supaClient
+            .channel('iconnecture-live-sync')
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'iconnecture_data', filter: 'id=eq.1' }, (cambio) => {
+              if (guardandoLocalRef.current) return;
+              const remoto = cambio.new?.payload;
+              if (!remoto) return;
+              const tsRemoto = remoto.ultimaModificacionTs || 0;
+              if (tsRemoto > versionLocalRef.current) {
+                versionLocalRef.current = tsRemoto;
+                setDb(normalizarPayloadNube(remoto));
+                setEstadoSync('actualizado');
+                setTimeout(() => setEstadoSync(prev => (prev === 'actualizado' ? 'conectado' : prev)), 3000);
+              }
+            })
+            .subscribe();
+        }
+
+        // 2. AUTO-REFRESCO AL VOLVER A LA PESTAÑA / DESBLOQUEAR IPHONE
+        const alVolverFoco = () => {
+          if (document.visibilityState === 'visible') {
+            sincronizarDesdeNube(false);
+          }
+        };
+        document.addEventListener('visibilitychange', alVolverFoco);
+        window.addEventListener('focus', alVolverFoco);
+
+        return () => {
+          document.removeEventListener('visibilitychange', alVolverFoco);
+          window.removeEventListener('focus', alVolverFoco);
+          if (canalRealtime && supaClient) supaClient.removeChannel(canalRealtime);
+        };
       }, []);
 
-      const guardarEnNube = async (nuevoEstadoDb) => {
-        setDb(nuevoEstadoDb);
-        if (supaClient) {
-          const { error } = await supaClient.from('iconnecture_data').update({ payload: nuevoEstadoDb }).eq('id', 1);
-          if (error) alert("Atención: No se pudo guardar en la nube. Revisá tu conexión.");
+      const guardarEnNube = async (nuevoEstadoDb, forzarSobrescritura = false) => {
+        if (!supaClient) {
+          setDb(nuevoEstadoDb);
+          return true;
+        }
+
+        setEstadoSync('guardando');
+        guardandoLocalRef.current = true;
+
+        try {
+          // ESCUDO ANTI-PISADO: verifica si otro dispositivo guardó algo más nuevo
+          if (!forzarSobrescritura) {
+            const { data: actualNube, error: errCheck } = await supaClient.from('iconnecture_data').select('payload').eq('id', 1).single();
+            if (!errCheck && actualNube?.payload) {
+              const tsRemoto = actualNube.payload.ultimaModificacionTs || 0;
+              if (tsRemoto > versionLocalRef.current) {
+                versionLocalRef.current = tsRemoto;
+                setDb(normalizarPayloadNube(actualNube.payload));
+                setEstadoSync('actualizado');
+                setTimeout(() => setEstadoSync('conectado'), 3000);
+                alert('⚠️ Otro dispositivo guardó cambios recién. Actualizamos tu pantalla automáticamente para no pisar esos datos.\n\nRevisá y volvé a confirmar tu acción.');
+                return false;
+              }
+            }
+          }
+
+          const nuevoTs = Date.now();
+          const estadoFinal = { ...nuevoEstadoDb, ultimaModificacionTs: nuevoTs };
+          const { error } = await supaClient.from('iconnecture_data').update({ payload: estadoFinal }).eq('id', 1);
+
+          if (error) {
+            setEstadoSync('error');
+            alert("Atención: No se pudo guardar en la nube. Revisá tu conexión.");
+            return false;
+          }
+
+          versionLocalRef.current = nuevoTs;
+          setDb(estadoFinal);
+          setEstadoSync('conectado');
+          return true;
+        } finally {
+          setTimeout(() => { guardandoLocalRef.current = false; }, 800);
         }
       };
 
@@ -3729,6 +3826,10 @@
                </div>
 
                <div className="flex items-center gap-2 shrink-0">
+                 <button type="button" onClick={() => sincronizarDesdeNube(true)} className={`flex items-center gap-1.5 px-2.5 h-8 rounded-full text-[10px] font-bold border transition ${estadoSync === 'guardando' ? 'bg-amber-950/70 text-amber-300 border-amber-500/50' : estadoSync === 'actualizado' ? 'bg-cyan-950/80 text-cyan-300 border-cyan-400' : estadoSync === 'error' ? 'bg-rose-950 text-rose-300 border-rose-500' : 'bg-slate-800/90 hover:bg-slate-700 text-emerald-400 border-slate-700'}`} title="Estado de sincronización (Tocá para sincronizar ahora)">
+                   <span className={`w-2 h-2 rounded-full ${estadoSync === 'guardando' ? 'bg-amber-400 animate-ping' : estadoSync === 'actualizado' ? 'bg-cyan-400 animate-pulse' : estadoSync === 'error' ? 'bg-rose-500' : 'bg-emerald-400'}`}></span>
+                   <span className="hidden sm:inline">{estadoSync === 'guardando' ? 'Guardando...' : estadoSync === 'actualizado' ? 'Actualizado' : estadoSync === 'error' ? 'Sin red' : 'En vivo'}</span>
+                 </button>
                  <button onClick={() => setModoPrivado(!modoPrivado)} className={`flex items-center justify-center w-8 h-8 rounded-full transition-all text-xs ${modoPrivado ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'}`} title="Ocultar Números">
                      <i className={`fa-solid ${modoPrivado ? 'fa-eye-slash' : 'fa-eye'}`}></i>
                  </button>
