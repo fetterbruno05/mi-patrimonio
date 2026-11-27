@@ -222,6 +222,8 @@
       const [editandoRepHist, setEditandoRepHist] = useState(null);
       const [copiadoId, setCopiadoId] = useState(null);
       const [modalRegistroActividad, setModalRegistroActividad] = useState(null);
+      const [backupParaRestaurar, setBackupParaRestaurar] = useState(null);
+      const inputBackupRef = useRef(null);
 
       const [filtroUsuario, setFiltroUsuario] = useState('');
       const [filtroFechaExacta, setFiltroFechaExacta] = useState('');
@@ -378,6 +380,58 @@
           URL.revokeObjectURL(url);
           guardarEnNube(nuevoEstado);
           setBloqueoBackup(false);
+      };
+      const leerArchivoBackup = (e) => {
+          const archivo = e.target.files?.[0];
+          e.target.value = '';
+          if (!archivo) return;
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+              try {
+                  const parsed = JSON.parse(ev.target.result);
+                  if (!parsed || typeof parsed !== 'object' || (!Array.isArray(parsed.activos) && !Array.isArray(parsed.stock) && !Array.isArray(parsed.reparacionesFin))) {
+                      return alert('El archivo seleccionado no parece ser un backup válido de este sistema.');
+                  }
+                  setBackupParaRestaurar({ nombreArchivo: archivo.name, data: parsed });
+              } catch (err) {
+                  alert('No se pudo leer el archivo JSON. Verificá que no esté dañado.');
+              }
+          };
+          reader.readAsText(archivo);
+      };
+
+      const confirmarRestauracionBackup = async () => {
+          if (!backupParaRestaurar?.data) return;
+          if (!window.confirm(`⚠️ ÚLTIMA CONFIRMACIÓN:\n\nEsto va a REEMPLAZAR toda tu base de datos actual en la nube por el archivo "${backupParaRestaurar.nombreArchivo}".\n\n¿Estás 100% seguro de continuar?`)) return;
+
+          const d = backupParaRestaurar.data;
+          const logRestauracion = generarLog('Restauró Backup', `Restauró la base completa desde "${backupParaRestaurar.nombreArchivo}".`);
+          const estadoRestaurado = {
+              ...DB_TEMPLATE,
+              ...d,
+              cotizacionDolar: parseFloat(d.cotizacionDolar) || 1500,
+              activos: Array.isArray(d.activos) ? d.activos.filter(Boolean) : [],
+              gastosFijos: Array.isArray(d.gastosFijos) ? d.gastosFijos.filter(Boolean) : [],
+              gastosPuntuales: Array.isArray(d.gastosPuntuales) ? d.gastosPuntuales.filter(Boolean) : [],
+              deudas: Array.isArray(d.deudas) ? d.deudas.filter(Boolean) : [],
+              deudasCobrar: Array.isArray(d.deudasCobrar) ? d.deudasCobrar.filter(Boolean) : [],
+              stock: Array.isArray(d.stock) ? d.stock.filter(Boolean) : [],
+              ventas: Array.isArray(d.ventas) ? d.ventas.filter(Boolean) : [],
+              taller: Array.isArray(d.taller) ? d.taller.filter(Boolean) : [],
+              reparacionesFin: Array.isArray(d.reparacionesFin) ? d.reparacionesFin.filter(Boolean) : [],
+              rmaProveedores: Array.isArray(d.rmaProveedores) ? d.rmaProveedores.filter(Boolean) : [],
+              historiaConceptos: Array.isArray(d.historiaConceptos) ? d.historiaConceptos : [],
+              historiaStock: Array.isArray(d.historiaStock) ? d.historiaStock : [],
+              historiaGremios: Array.isArray(d.historiaGremios) ? d.historiaGremios : ['iConnecture'],
+              historiaMetodosPago: Array.isArray(d.historiaMetodosPago) ? d.historiaMetodosPago : ['Efectivo', 'Transferencia'],
+              historiaProveedores: Array.isArray(d.historiaProveedores) ? d.historiaProveedores : ['Proveedor Principal'],
+              bonosVentasAcreditados: d.bonosVentasAcreditados && typeof d.bonosVentasAcreditados === 'object' ? d.bonosVentasAcreditados : {},
+              actividad: [logRestauracion, ...(Array.isArray(d.actividad) ? d.actividad.filter(Boolean) : [])].slice(0, 500)
+          };
+
+          await guardarEnNube(estadoRestaurado);
+          setBackupParaRestaurar(null);
+          alert('✅ Backup restaurado correctamente en la nube.');
       };
 
       const redondear = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
@@ -3353,6 +3407,124 @@
       });
 
       // ==========================================
+      const alertasUrgentes = useMemo(() => {
+          const lista = [];
+
+          // 1. Gastos Fijos vencidos / vence hoy (Crítico) y próximos a vencer <= 5 días (Alerta)
+          const fijosVencidos = [];
+          const fijosPorVencer = [];
+          (db.gastosFijos || []).forEach(g => {
+              const est = obtenerEstadoGastoFijo(g);
+              if (est.color === 'rojo') fijosVencidos.push({ ...g, est });
+              else if (est.color === 'amarillo') fijosPorVencer.push({ ...g, est });
+          });
+
+          if (fijosVencidos.length > 0) {
+              lista.push({
+                  id: 'fijos_rojos',
+                  nivel: 'critico',
+                  icono: 'fa-calendar-xmark',
+                  titulo: `${fijosVencidos.length} ${fijosVencidos.length === 1 ? 'Gasto Fijo vencido o vence hoy' : 'Gastos Fijos vencidos / vencen hoy'}`,
+                  detalle: fijosVencidos.map(g => `${g.concepto} (${g.est.texto})`).join(' • '),
+                  accionLabel: 'Ir a pagar',
+                  onClick: () => setVista('gastos')
+              });
+          }
+
+          if (fijosPorVencer.length > 0) {
+              lista.push({
+                  id: 'fijos_amarillos',
+                  nivel: 'alerta',
+                  icono: 'fa-clock',
+                  titulo: `${fijosPorVencer.length} ${fijosPorVencer.length === 1 ? 'Gasto Fijo vence pronto (≤ 5d)' : 'Gastos Fijos vencen pronto (≤ 5d)'}`,
+                  detalle: fijosPorVencer.map(g => `${g.concepto} (${g.est.texto})`).join(' • '),
+                  accionLabel: 'Ver gastos',
+                  onClick: () => setVista('gastos')
+              });
+          }
+
+          // 2. Equipos en Taller hace más de 7 días
+          const tallerDemorados = (db.taller || []).filter(t => calcularDiasPasados(t.fechaTimestamp || t.id) > 7);
+          if (tallerDemorados.length > 0) {
+              lista.push({
+                  id: 'taller_demorado',
+                  nivel: 'critico',
+                  icono: 'fa-screwdriver-wrench',
+                  titulo: `${tallerDemorados.length} ${tallerDemorados.length === 1 ? 'equipo lleva +7 días en taller' : 'equipos llevan +7 días en taller'}`,
+                  detalle: tallerDemorados.slice(0, 3).map(t => `${t.modelo} (${calcularDiasPasados(t.fechaTimestamp || t.id)}d)`).join(' • ') + (tallerDemorados.length > 3 ? ` y ${tallerDemorados.length - 3} más` : ''),
+                  accionLabel: 'Revisar taller',
+                  onClick: () => setVista('taller')
+              });
+          }
+
+          // 3. Reparaciones finalizadas pendientes de cobro
+          const repsSinCobrar = (db.reparacionesFin || []).filter(r => r.estadoCobro === 'pendiente');
+          if (repsSinCobrar.length > 0) {
+              const totalPendUSD = repsSinCobrar.reduce((acc, r) => acc + (parseFloat(r.montoAdeudadoRestante !== undefined ? r.montoAdeudadoRestante : r.montoCobrado) || 0), 0);
+              lista.push({
+                  id: 'taller_sin_cobrar',
+                  nivel: 'alerta',
+                  icono: 'fa-hand-holding-dollar',
+                  titulo: `${repsSinCobrar.length} ${repsSinCobrar.length === 1 ? 'reparación entregada sin cobrar' : 'reparaciones entregadas sin cobrar'}`,
+                  detalle: `Pendiente total: ${formatDinero(convertirParaMostrar(totalPendUSD, 'USD'))}`,
+                  accionLabel: 'Cobrar',
+                  onClick: () => {
+                      setFiltroRep({ cliente: '', telefono: '', modelo: '', imei: '', origen: '', estadoCobro: 'pendiente', metodoPago: '', fechaExacta: '', desde: '', hasta: '' });
+                      setVista('reparacionesFin');
+                  }
+              });
+          }
+
+          // 4. RMA pendientes de reclamo con proveedores
+          const rmas = db.rmaProveedores || [];
+          if (rmas.length > 0) {
+              lista.push({
+                  id: 'rma_pendientes',
+                  nivel: 'alerta',
+                  icono: 'fa-truck-ramp-box',
+                  titulo: `${rmas.length} ${rmas.length === 1 ? 'repuesto RMA por reclamar' : 'repuestos RMA por reclamar'}`,
+                  detalle: rmas.slice(0, 3).map(r => `${r.repuesto} (${r.proveedor})`).join(' • ') + (rmas.length > 3 ? ` y ${rmas.length - 3} más` : ''),
+                  accionLabel: 'Gestionar RMA',
+                  onClick: () => setVista('garantias')
+              });
+          }
+
+          // 5. Stock agotado (0) o crítico (<= 3)
+          const sinStock = stockAgrupado.filter(g => g.cantidadTotal === 0);
+          const stockBajo = stockAgrupado.filter(g => g.cantidadTotal > 0 && g.cantidadTotal <= 3);
+          if (sinStock.length > 0 || stockBajo.length > 0) {
+              lista.push({
+                  id: 'stock_critico',
+                  nivel: sinStock.length > 0 ? 'critico' : 'alerta',
+                  icono: 'fa-boxes-stacked',
+                  titulo: sinStock.length > 0
+                      ? `${sinStock.length} sin stock${stockBajo.length > 0 ? ` y ${stockBajo.length} con stock bajo` : ''}`
+                      : `${stockBajo.length} ${stockBajo.length === 1 ? 'modelo en stock crítico (≤ 3)' : 'modelos en stock crítico (≤ 3)'}`,
+                  detalle: [...sinStock, ...stockBajo].slice(0, 3).map(g => `${g.concepto} (${g.cantidadTotal})`).join(' • ') + ((sinStock.length + stockBajo.length) > 3 ? ` y ${(sinStock.length + stockBajo.length) - 3} más` : ''),
+                  accionLabel: 'Ver faltantes',
+                  onClick: () => {
+                      setFiltroStock(prev => ({ ...prev, soloCritico: true }));
+                      setVista('stock');
+                  }
+              });
+          }
+
+          // 6. Cuentas a Cobrar con más de 30 días de antigüedad
+          const cobrarViejas = (db.deudasCobrar || []).filter(d => calcularDiasPasados(d.fechaTimestamp || d.id) > 30);
+          if (cobrarViejas.length > 0) {
+              lista.push({
+                  id: 'cobrar_antiguas',
+                  nivel: 'alerta',
+                  icono: 'fa-hourglass-end',
+                  titulo: `${cobrarViejas.length} ${cobrarViejas.length === 1 ? 'cuenta a cobrar con +30 días' : 'cuentas a cobrar con +30 días'}`,
+                  detalle: cobrarViejas.slice(0, 3).map(d => `${d.deudor} (${calcularDiasPasados(d.fechaTimestamp || d.id)}d)`).join(' • '),
+                  accionLabel: 'Ver cuentas',
+                  onClick: () => setVista('cobrar')
+              });
+          }
+
+          return lista;
+      }, [db.gastosFijos, db.taller, db.reparacionesFin, db.rmaProveedores, db.deudasCobrar, stockAgrupado, db.cotizacionDolar, monedaVisual, modoPrivado]);
       // UI RENDER 
       // ==========================================
       if (!isLoaded) return <div className="flex altura-dinamica items-center justify-center font-bold text-blue-400 animate-pulse text-lg">Conectando a tu Nube...</div>;
@@ -3537,6 +3709,10 @@
               <button onClick={ejecutarDescargaBackup} className="w-full bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-amber-400 border border-slate-800 rounded-xl py-1.5 px-2 text-[10px] font-bold transition flex items-center justify-center gap-1.5">
                 <i className="fa-solid fa-download text-amber-400"></i> Descargar Backup ({db.tsUltimoBackup ? `hace ${calcularDiasPasados(db.tsUltimoBackup)}d` : 'Pendiente'})
               </button>
+              <input ref={inputBackupRef} type="file" accept=".json,application/json" onChange={leerArchivoBackup} className="hidden" />
+              <button type="button" onClick={() => inputBackupRef.current?.click()} className="w-full bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-cyan-400 border border-slate-800 rounded-xl py-1.5 px-2 text-[10px] font-bold transition flex items-center justify-center gap-1.5">
+                <i className="fa-solid fa-upload text-cyan-400"></i> Restaurar Backup (.json)
+              </button>
             </div>
           </aside>
 
@@ -3569,6 +3745,49 @@
               {/* VISTA 1: PATRIMONIO */}
               {vista === 'patrimonio' && (
                 <div className="max-w-5xl mx-auto space-y-5 fade-in">
+                  {/* CENTRO DE ALERTAS URGENTES */}
+                  {alertasUrgentes.length > 0 && (() => {
+                    const hayCriticas = alertasUrgentes.some(a => a.nivel === 'critico');
+                    return (
+                      <div className={`rounded-2xl p-4 border-2 shadow-xl space-y-3 fade-in ${hayCriticas ? 'bg-gradient-to-r from-rose-950/60 via-slate-900 to-amber-950/30 border-rose-500/70' : 'bg-gradient-to-r from-amber-950/50 via-slate-900 to-slate-900 border-amber-500/60'}`}>
+                        <div className="flex items-center justify-between gap-2 flex-wrap border-b border-white/10 pb-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs ${hayCriticas ? 'bg-rose-600 text-white animate-pulse' : 'bg-amber-500 text-slate-950'}`}>
+                              <i className="fa-solid fa-bell"></i>
+                            </span>
+                            <div>
+                              <h3 className="text-xs sm:text-sm font-black text-white uppercase tracking-wider">
+                                Centro de Alertas Urgentes ({alertasUrgentes.length})
+                              </h3>
+                              <p className="text-[10px] text-slate-300">Tocá cualquier alerta para ir directo a resolverla.</p>
+                            </div>
+                          </div>
+                          {hayCriticas && (
+                            <span className="bg-rose-600 text-white px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider">
+                              Atención requerida
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                          {alertasUrgentes.map(al => (
+                            <button key={al.id} type="button" onClick={al.onClick} className={`text-left rounded-xl p-3 border transition flex items-center justify-between gap-3 group ${al.nivel === 'critico' ? 'bg-rose-950/40 hover:bg-rose-950/70 border-rose-500/50 hover:border-rose-400' : 'bg-amber-950/30 hover:bg-amber-950/60 border-amber-500/40 hover:border-amber-400'}`}>
+                              <div className="flex items-start gap-2.5 min-w-0">
+                                <i className={`fa-solid ${al.icono} text-sm mt-0.5 shrink-0 ${al.nivel === 'critico' ? 'text-rose-400' : 'text-amber-400'}`}></i>
+                                <div className="min-w-0">
+                                  <p className="font-black text-white text-xs truncate">{al.titulo}</p>
+                                  <p className="text-[11px] text-slate-300 truncate mt-0.5">{al.detalle}</p>
+                                </div>
+                              </div>
+                              <span className={`shrink-0 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition ${al.nivel === 'critico' ? 'bg-rose-600 group-hover:bg-rose-500 text-white' : 'bg-amber-500/20 group-hover:bg-amber-500 text-amber-300 group-hover:text-slate-950 border border-amber-500/40'}`}>
+                                {al.accionLabel} <i className="fa-solid fa-arrow-right ml-1 text-[9px]"></i>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                     <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-blue-900/40 to-slate-900 border border-blue-500/30 rounded-2xl p-4 shadow-lg">
                       <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-1"><i className="fa-solid fa-scale-balanced mr-1.5"></i>Patrimonio Neto</p>
@@ -7450,6 +7669,62 @@
           </div>
           
           {/* MODALES DE EDICIÓN FLOTANTES */}
+          {backupParaRestaurar && (() => {
+            const b = backupParaRestaurar.data || {};
+            const resumenItems = [
+              { lbl: 'Cuentas / Activos', backup: (b.activos || []).length, actual: (db.activos || []).length },
+              { lbl: 'Stock Repuestos', backup: (b.stock || []).length, actual: (db.stock || []).length },
+              { lbl: 'Equipos en Taller', backup: (b.taller || []).length, actual: (db.taller || []).length },
+              { lbl: 'Hist. Reparaciones', backup: (b.reparacionesFin || []).length, actual: (db.reparacionesFin || []).length },
+              { lbl: 'Ventas Equipos', backup: (b.ventas || []).length, actual: (db.ventas || []).length },
+              { lbl: 'Cuentas a Cobrar', backup: (b.deudasCobrar || []).length, actual: (db.deudasCobrar || []).length },
+              { lbl: 'Deudas a Otros', backup: (b.deudas || []).length, actual: (db.deudas || []).length },
+              { lbl: 'Gastos (Fij + Suel)', backup: (b.gastosFijos || []).length + (b.gastosPuntuales || []).length, actual: (db.gastosFijos || []).length + (db.gastosPuntuales || []).length }
+            ];
+            return (
+              <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
+                <div className="bg-slate-900 border-2 border-cyan-500/50 rounded-2xl p-5 max-w-md w-full space-y-4 shadow-2xl">
+                  <div className="border-b border-slate-800 pb-2.5">
+                    <h3 className="font-black text-white text-base flex items-center gap-2">
+                      <i className="fa-solid fa-clock-rotate-left text-cyan-400"></i> Confirmar Restauración de Backup
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5 truncate">Archivo: <strong className="text-cyan-300 font-mono">{backupParaRestaurar.nombreArchivo}</strong></p>
+                  </div>
+
+                  <div className="bg-rose-950/50 border border-rose-500/50 rounded-xl p-3 text-[11px] text-rose-200">
+                    <i className="fa-solid fa-triangle-exclamation text-rose-400 mr-1.5"></i>
+                    <strong>Atención:</strong> Al restaurar, se sobrescribirá toda la base actual en la nube con los datos de este archivo. Si querés resguardar el estado actual primero, descargá un backup antes.
+                  </div>
+
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2 text-xs">
+                    <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase border-b border-slate-800 pb-1.5">
+                      <span>Módulo</span>
+                      <span>En Backup  /  Actual</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-1.5 max-h-52 overflow-y-auto pr-1">
+                      <div className="flex justify-between items-center text-xs bg-slate-900/70 px-2.5 py-1.5 rounded-lg">
+                        <span className="text-slate-300 font-bold">Cotización Dólar</span>
+                        <span className="font-mono"><strong className="text-emerald-400">${b.cotizacionDolar || '-'}</strong> <span className="text-slate-500">/ ${db.cotizacionDolar}</span></span>
+                      </div>
+                      {resumenItems.map(r => (
+                        <div key={r.lbl} className="flex justify-between items-center text-xs bg-slate-900/70 px-2.5 py-1.5 rounded-lg">
+                          <span className="text-slate-300">{r.lbl}</span>
+                          <span className="font-mono"><strong className="text-cyan-400">{r.backup}</strong> <span className="text-slate-500">/ {r.actual}</span></span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button type="button" onClick={confirmarRestauracionBackup} className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-black py-2.5 rounded-xl transition text-xs shadow-md">
+                      <i className="fa-solid fa-upload mr-1.5"></i>Restaurar en la Nube
+                    </button>
+                    <button type="button" onClick={() => setBackupParaRestaurar(null)} className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
           {modalRegistroActividad && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
               <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
