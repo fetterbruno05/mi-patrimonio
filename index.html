@@ -155,6 +155,9 @@
         items: [],
         mostrarMasivo: false,
         textoMasivo: '',
+        modoInverso: false,
+        cuotaInversaPlan: '6',
+        cuotaInversaMonto: '',
         planes: [
           { cuotas: 3, recargo: 22, activo: true },
           { cuotas: 6, recargo: 33, activo: true },
@@ -207,6 +210,9 @@
       const [desgloseDeudaId, setDesgloseDeudaId] = useState(null); 
       
       const [editandoActivo, setEditandoActivo] = useState(null);
+      const [liquidandoActivo, setLiquidandoActivo] = useState(null);
+      const [mostrarPanelLiqGlobal, setMostrarPanelLiqGlobal] = useState(false);
+      const [cuentasLiqGlobal, setCuentasLiqGlobal] = useState(null);
       const [editandoFijo, setEditandoFijo] = useState(null);
       const [editandoDeuda, setEditandoDeuda] = useState(null);
       const [editandoDeudaCobrar, setEditandoDeudaCobrar] = useState(null); 
@@ -556,6 +562,34 @@
           setNuevaTransferencia({ origenId: '', destinoId: '', monto: '', moneda: 'ARS' });
       };
 
+      const procesarLiquidacionActivo = (e) => {
+        e.preventDefault();
+        if (!liquidandoActivo) return;
+        if (!liquidandoActivo.walletDestinoId) return alert('Elegí la billetera donde ingresa el dinero.');
+        const montoReal = parseFloat(liquidandoActivo.montoReal);
+        if (isNaN(montoReal) || montoReal <= 0) return alert('Ingresá un monto real de liquidación mayor a 0.');
+
+        const walletDest = (db.activos || []).find(w => w.id === parseInt(liquidandoActivo.walletDestinoId));
+        if (!walletDest) return alert('Billetera destino no encontrada.');
+
+        const monReal = liquidandoActivo.monedaReal || 'USD';
+        const valDeclaradoUSD = aUSDBase(liquidandoActivo.monto, liquidandoActivo.moneda, db.cotizacionDolar);
+        const valRealUSD = aUSDBase(montoReal, monReal, db.cotizacionDolar);
+        const diffUSD = redondear(valRealUSD - valDeclaradoUSD);
+        const txtDiff = diffUSD === 0
+          ? 'mismo valor declarado'
+          : (diffUSD > 0 ? `+U$D ${diffUSD} por encima del declarado` : `-U$D ${Math.abs(diffUSD)} por debajo del declarado`);
+
+        if (!window.confirm(`¿Confirmás liquidar "${liquidandoActivo.nombre}" por ${montoReal.toLocaleString('es-AR')} ${monReal}?\n\n• Entra a: ${walletDest.nombre}\n• Diferencia: ${txtDiff}\n• El activo físico se dará de baja.`)) return;
+
+        const activosConIngreso = procesarReembolsoWallet(liquidandoActivo.walletDestinoId, montoReal, monReal, db.activos);
+        const activosFinales = activosConIngreso.filter(a => a.id !== liquidandoActivo.id);
+
+        const log = generarLog('Liquidó Activo Físico', `Vendió "${liquidandoActivo.nombre}" (declarado: ${liquidandoActivo.monto} ${liquidandoActivo.moneda}) por ${montoReal} ${monReal} (${txtDiff}). Ingresó a "${walletDest.nombre}".`, { activo: liquidandoActivo, montoReal, monReal, destino: walletDest.nombre });
+        guardarEnNube({ ...db, activos: activosFinales, actividad: [log, ...(db.actividad || [])].slice(0, 500) });
+        setLiquidandoActivo(null);
+      };
+      
       const agregarGastoPuntual = (e) => {
         e.preventDefault();
         if (!nuevoGastoPuntual.walletId || !nuevoGastoPuntual.concepto) return alert('Completá los datos.');
@@ -1036,6 +1070,331 @@
         navigator.clipboard.writeText(lineas.join('\n'));
         setCopiadoId(`liq_${item.id}`);
         setTimeout(() => setCopiadoId(prev => (prev === `liq_${item.id}` ? null : prev)), 2500);
+      };
+      const esCuentaDeNegocio = (d) => {
+        const deud = (d.deudor || '').toLowerCase();
+        const mot = (d.motivo || '').toLowerCase();
+        return deud.includes('local') || deud.includes('negocio') || deud.includes('iconnecture') || deud.includes('gremio') || mot.includes('ventas') || mot.includes('reparaci') || mot.includes('cargador') || mot.includes('bonus') || mot.includes('50%') || mot.includes('gremio');
+      };
+
+      const obtenerIdsSeleccionadosLiqGlobal = () => {
+        const todas = db.deudasCobrar || [];
+        if (Array.isArray(cuentasLiqGlobal)) {
+          return cuentasLiqGlobal.filter(id => todas.some(d => d.id === id));
+        }
+        const delNegocio = todas.filter(esCuentaDeNegocio).map(d => d.id);
+        return delNegocio.length > 0 ? delNegocio : todas.map(d => d.id);
+      };
+
+      const toggleCuentaLiqGlobal = (idCuenta) => {
+        const actuales = obtenerIdsSeleccionadosLiqGlobal();
+        if (actuales.includes(idCuenta)) setCuentasLiqGlobal(actuales.filter(id => id !== idCuenta));
+        else setCuentasLiqGlobal([...actuales, idCuenta]);
+      };
+
+      const copiarLiquidacionGlobal = (cuentasSel) => {
+        if (!cuentasSel || cuentasSel.length === 0) return alert('Seleccioná al menos una cuenta para generar la liquidación.');
+        const fechaHoy = new Date().toLocaleDateString('es-AR');
+        const coti = parseFloat(db.cotizacionDolar) || 1500;
+        const fmtMon = (val, mon) => {
+          const n = parseFloat(val) || 0;
+          return mon === 'ARS'
+            ? `$ ${Math.round(n).toLocaleString('es-AR')} ARS`
+            : `U$D ${redondear(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        };
+
+        let totUSD = 0; let totRepUSD = 0; let totGanUSD = 0;
+        const lineas = [
+          `🧾 *LIQUIDACIÓN GLOBAL DEL NEGOCIO*`,
+          `━━━━━━━━━━━━━━━━━━`,
+          `📅 *Fecha:* ${fechaHoy} (Dólar ref: $${coti})`,
+          `📂 *Cuentas incluidas:* ${cuentasSel.length}`,
+          `━━━━━━━━━━━━━━━━━━`
+        ];
+
+        cuentasSel.forEach((item, idx) => {
+          const monBase = item.moneda || 'USD';
+          const saldoNum = parseFloat(item.monto) || 0;
+          const desg = calcularDesgloseGananciaDeuda(item);
+          totUSD += desg.totalUSD;
+          totRepUSD += desg.repuestosUSD;
+          totGanUSD += desg.gananciaUSD;
+
+          if (idx > 0) lineas.push('');
+          lineas.push(`📌 *${item.deudor}* — _${item.motivo}_`);
+
+          const movs = Array.isArray(item.movimientos) && item.movimientos.length > 0 ? [...item.movimientos].reverse() : [];
+          if (movs.length === 0) {
+            lineas.push(`   ▪️ Saldo vigente: *${fmtMon(saldoNum, monBase)}*`);
+          } else {
+            movs.forEach(m => {
+              const monMov = m.moneda || 'USD';
+              const valMov = m.monto !== undefined ? m.monto : m.montoUSD;
+              const signo = m.tipo === 'abono' ? '➖' : '▪️';
+              const pref = m.tipo === 'abono' ? '-' : '+';
+              lineas.push(`   ${signo} *${m.fecha || '-'}* | ${m.titulo || 'Movimiento'} — *${pref}${fmtMon(valMov, monMov)}*`);
+            });
+          }
+          const subARS = Math.round(desg.totalUSD * coti);
+          lineas.push(`   ➤ *Subtotal:* ${fmtMon(saldoNum, monBase)}${monBase === 'USD' ? ` ($${subARS.toLocaleString('es-AR')})` : ` (U$D ${redondear(desg.totalUSD)})`}`);
+        });
+
+        const totARS = Math.round(totUSD * coti);
+        const repARS = Math.round(totRepUSD * coti);
+        const ganARS = Math.round(totGanUSD * coti);
+
+        lineas.push(`━━━━━━━━━━━━━━━━━━`);
+        lineas.push(`💰 *TOTAL GLOBAL A LIQUIDAR:*`);
+        lineas.push(`💵 *U$D ${redondear(totUSD).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD*  |  *$ ${totARS.toLocaleString('es-AR')} ARS*`);
+        if (totRepUSD > 0.01) {
+          lineas.push(`   ↳ 📦 *Repuestos (Proveedor):* U$D ${redondear(totRepUSD).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ($${repARS.toLocaleString('es-AR')})`);
+          lineas.push(`   ↳ 💰 *Ganancia Neta / Comisiones:* U$D ${redondear(totGanUSD).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ($${ganARS.toLocaleString('es-AR')})`);
+        }
+
+        navigator.clipboard.writeText(lineas.join('\n'));
+        setCopiadoId('liq_global');
+        setTimeout(() => setCopiadoId(prev => (prev === 'liq_global' ? null : prev)), 2500);
+      };
+
+      const descargarPDFLiquidacion = (cuentasSel, tituloDoc = 'LIQUIDACIÓN GLOBAL DEL NEGOCIO') => {
+        if (!window.jspdf || !window.jspdf.jsPDF) return alert('No se cargó el generador de PDF. Recargá la página e intentá de nuevo.');
+        if (!cuentasSel || cuentasSel.length === 0) return alert('Seleccioná al menos una cuenta para generar el PDF.');
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+        const fechaHoy = new Date().toLocaleDateString('es-AR');
+        const coti = parseFloat(db.cotizacionDolar) || 1500;
+        const esGlobal = cuentasSel.length > 1;
+        const nroLiq = String(Date.now()).slice(-6);
+
+        const fmtMon = (val, mon) => {
+          const n = parseFloat(val) || 0;
+          return mon === 'ARS'
+            ? `$ ${Math.round(n).toLocaleString('es-AR')} ARS`
+            : `U$D ${redondear(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        };
+
+        let totUSD = 0; let totRepUSD = 0; let totGanUSD = 0;
+        cuentasSel.forEach(d => {
+          const dg = calcularDesgloseGananciaDeuda(d);
+          totUSD += dg.totalUSD;
+          totRepUSD += dg.repuestosUSD;
+          totGanUSD += dg.gananciaUSD;
+        });
+
+        // ENCABEZADO VIOLETA OSCURO ESTILO ICONNECTURE
+        doc.setFillColor(46, 16, 101);
+        doc.rect(0, 0, 210, 36, 'F');
+        doc.setFillColor(147, 51, 234);
+        doc.rect(0, 36, 210, 1.5, 'F');
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14.5);
+        doc.text(esGlobal ? 'RESUMEN DE LIQUIDACIÓN GLOBAL' : 'RESUMEN DE LIQUIDACIÓN', 15, 13);
+        doc.setFontSize(8.5);
+        doc.setTextColor(216, 180, 254);
+        doc.text('ICONNECTURE  •  SERVICIO TÉCNICO Y VENTAS', 15, 20);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(241, 245, 249);
+        doc.text('Instagram: @iconnecture   |   WhatsApp: 341 366-3882', 15, 28);
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10.5);
+        doc.text(`LIQUIDACIÓN N° #${nroLiq}`, 195, 13.5, { align: 'right' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.8);
+        doc.setTextColor(216, 180, 254);
+        doc.text(`Fecha: ${fechaHoy}`, 195, 20.5, { align: 'right' });
+        doc.text(`Dólar referencia: $ ${coti.toLocaleString('es-AR')}`, 195, 27.5, { align: 'right' });
+
+        // TARJETAS RESUMEN SUPERIORES (TOTAL | GANANCIA NETA | REPUESTOS)
+        let y = 45;
+        const totARS = Math.round(totUSD * coti);
+        const ganARS = Math.round(totGanUSD * coti);
+        const repARS = Math.round(totRepUSD * coti);
+
+        doc.setFillColor(236, 253, 245);
+        doc.setDrawColor(110, 231, 183);
+        doc.roundedRect(15, y, 58, 24, 2.5, 2.5, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(6, 95, 70);
+        doc.text('TOTAL A LIQUIDAR', 44, y + 6.5, { align: 'center' });
+        doc.setFontSize(11);
+        doc.setTextColor(4, 120, 87);
+        doc.text(`U$D ${redondear(totUSD).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 44, y + 14, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(51, 65, 85);
+        doc.text(`$ ${totARS.toLocaleString('es-AR')} ARS`, 44, y + 20, { align: 'center' });
+
+        doc.setFillColor(240, 249, 255);
+        doc.setDrawColor(125, 211, 252);
+        doc.roundedRect(76, y, 58, 24, 2.5, 2.5, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(7, 89, 133);
+        doc.text('GANANCIA NETA / COMISIONES', 105, y + 6.5, { align: 'center' });
+        doc.setFontSize(11);
+        doc.setTextColor(3, 105, 161);
+        doc.text(`U$D ${redondear(totGanUSD).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 105, y + 14, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(51, 65, 85);
+        doc.text(`$ ${ganARS.toLocaleString('es-AR')} ARS`, 105, y + 20, { align: 'center' });
+
+        doc.setFillColor(255, 251, 235);
+        doc.setDrawColor(252, 211, 77);
+        doc.roundedRect(137, y, 58, 24, 2.5, 2.5, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(146, 64, 14);
+        doc.text('REPUESTOS (PROVEEDOR)', 166, y + 6.5, { align: 'center' });
+        doc.setFontSize(11);
+        doc.setTextColor(180, 83, 9);
+        doc.text(`U$D ${redondear(totRepUSD).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 166, y + 14, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(51, 65, 85);
+        doc.text(`$ ${repARS.toLocaleString('es-AR')} ARS`, 166, y + 20, { align: 'center' });
+
+        y += 33;
+
+        const asegurarEspacio = (altoReq) => {
+          if (y + altoReq > 270) {
+            doc.addPage();
+            y = 18;
+          }
+        };
+
+        // DESGLOSE DETALLADO CUENTA POR CUENTA
+        cuentasSel.forEach(item => {
+          const monBase = item.moneda || 'USD';
+          const saldoNum = parseFloat(item.monto) || 0;
+          const desg = calcularDesgloseGananciaDeuda(item);
+          const movs = Array.isArray(item.movimientos) && item.movimientos.length > 0 ? [...item.movimientos].reverse() : [];
+
+          asegurarEspacio(26);
+          doc.setFillColor(245, 243, 255);
+          doc.setDrawColor(196, 181, 253);
+          doc.roundedRect(15, y, 180, 12, 2, 2, 'FD');
+          doc.setFillColor(107, 33, 168);
+          doc.rect(15, y, 2.5, 12, 'F');
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9.5);
+          doc.setTextColor(46, 16, 101);
+          doc.text(`${item.deudor} — ${item.motivo}`, 20, y + 5.2);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.8);
+          doc.setTextColor(100, 116, 139);
+          const subDesgTxt = desg.repuestosUSD > 0.01
+            ? `Repuestos: U$D ${desg.repuestosUSD} | Ganancia: U$D ${desg.gananciaUSD}`
+            : `Fijado en ${monBase}`;
+          doc.text(subDesgTxt, 20, y + 9.8);
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9.5);
+          doc.setTextColor(4, 120, 87);
+          doc.text(fmtMon(saldoNum, monBase), 191, y + 5.5, { align: 'right' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.5);
+          doc.setTextColor(71, 85, 105);
+          const eqSubTxt = monBase === 'USD' ? `($ ${Math.round(desg.totalUSD * coti).toLocaleString('es-AR')} ARS)` : `(U$D ${redondear(desg.totalUSD)} USD)`;
+          doc.text(eqSubTxt, 191, y + 9.8, { align: 'right' });
+
+          y += 15;
+
+          if (movs.length === 0) {
+            asegurarEspacio(10);
+            doc.setFont('helvetica', 'italic');
+            doc.setFontSize(8.2);
+            doc.setTextColor(100, 116, 139);
+            doc.text('Saldo acumulado sin desglose de ítems individuales.', 20, y + 4);
+            y += 10;
+          } else {
+            movs.forEach(m => {
+              const monMov = m.moneda || 'USD';
+              const valMov = m.monto !== undefined ? m.monto : m.montoUSD;
+              const infoM = calcularDesgloseMovCobrar(item, m);
+              const esAbono = m.tipo === 'abono';
+
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(8.3);
+              const titLines = doc.splitTextToSize(`${m.fecha || '-'}  |  ${m.titulo || 'Movimiento'}`, 132);
+              doc.setFont('helvetica', 'normal');
+              doc.setFontSize(7.5);
+              let detStr = (m.detalle || '').replace(/[^\x20-\x7E\u00C0-\u024F•$%\-+().,:/ ]/g, '').trim();
+              if (!esAbono && infoM.repUSD > 0.01) {
+                detStr = `${detStr ? detStr + '  |  ' : ''}Repuesto: U$D ${redondear(infoM.repUSD)} / Ganancia: U$D ${redondear(infoM.ganUSD)}`;
+              }
+              const detLines = detStr ? doc.splitTextToSize(detStr, 132) : [];
+              const filaH = Math.max(9.5, (titLines.length * 4) + (detLines.length * 3.6) + 4);
+
+              asegurarEspacio(filaH + 2);
+              doc.setFillColor(esAbono ? 255 : 248, esAbono ? 241 : 250, esAbono ? 242 : 252);
+              doc.setDrawColor(226, 232, 240);
+              doc.roundedRect(17, y, 178, filaH, 1.5, 1.5, 'FD');
+
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(8.3);
+              doc.setTextColor(15, 23, 42);
+              doc.text(titLines, 20, y + 4.5);
+
+              if (detLines.length > 0) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(7.5);
+                doc.setTextColor(100, 116, 139);
+                doc.text(detLines, 20, y + 4.5 + (titLines.length * 4));
+              }
+
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(8.8);
+              doc.setTextColor(esAbono ? 190 : 4, esAbono ? 18 : 120, esAbono ? 60 : 87);
+              doc.text(`${esAbono ? '-' : '+'}${fmtMon(valMov, monMov)}`, 192, y + 5.2, { align: 'right' });
+
+              y += filaH + 1.8;
+            });
+            y += 4;
+          }
+        });
+
+        // BLOQUE FINAL DE FIRMA Y PIE
+        if (y > 235) {
+          doc.addPage();
+          y = 20;
+        }
+        const yFirma = Math.max(y + 24, 258);
+        doc.setFont('times', 'italic');
+        doc.setFontSize(22);
+        doc.setTextColor(15, 15, 20);
+        doc.text('iConnecture', 55, yFirma - 1.8, { align: 'center' });
+
+        doc.setLineWidth(0.2);
+        doc.setDrawColor(148, 163, 184);
+        doc.line(25, yFirma, 85, yFirma);
+        doc.line(125, yFirma, 185, yFirma);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text('Firma Responsable • iConnecture', 55, yFirma + 5.5, { align: 'center' });
+        doc.text('Recibido / Conformidad', 155, yFirma + 5.5, { align: 'center' });
+
+        doc.setDrawColor(226, 232, 240);
+        doc.line(15, 277, 195, 277);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(88, 28, 135);
+        doc.text('iConnecture  •  Instagram: @iconnecture  •  WhatsApp: 341 366-3882', 105, 283, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184);
+        doc.text(`Liquidación digital #${nroLiq} generada el ${fechaHoy} — Cotización ref. $${coti}.`, 105, 288.5, { align: 'center' });
+
+        const nomArch = esGlobal ? `Liquidacion_Global_iConnecture_${fechaHoy.replace(/\//g, '-')}.pdf` : `Liquidacion_${limpiarNombreArchivoPDF(tituloDoc)}_${fechaHoy.replace(/\//g, '-')}.pdf`;
+        doc.save(nomArch);
       };
       const eliminarDeudaCobrar = (itemDeuda) => {
         if(window.confirm(`¿Estás seguro de eliminar la deuda de ${itemDeuda.deudor} sin recuperar la plata a ninguna billetera?`)){
@@ -3302,6 +3661,11 @@
                           <div className="flex items-center gap-2.5 shrink-0">
                             <span className="font-mono font-black text-blue-400 text-base">{formatDinero(convertirParaMostrar(item.monto, item.moneda))}</span>
                             <div className="flex gap-1">
+                              {item.tipo === 'activo' && (
+                                <button type="button" onClick={() => setLiquidandoActivo({ ...item, montoReal: String(item.monto), monedaReal: item.moneda, walletDestinoId: '' })} className="bg-emerald-950 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/40 px-2 h-7 rounded-lg text-[10px] font-bold transition-colors flex items-center gap-1" title="Vender / Pasar a dinero líquido">
+                                  <i className="fa-solid fa-money-bill-transfer"></i><span>Liquidar</span>
+                                </button>
+                              )}
                               <button onClick={() => setEditandoActivo({...item, tipo: item.tipo || 'billetera', tna: item.tna || '', tnaOriginal: item.tna || ''})} className="bg-slate-800 hover:bg-slate-700 text-slate-300 w-7 h-7 rounded-lg text-xs transition-colors"><i className="fa-solid fa-pen"></i></button>
                               <button onClick={() => {
                                   if (!window.confirm(`¿Seguro querés ELIMINAR "${item.nombre}" (${item.monto} ${item.moneda})?`)) return;
@@ -4887,6 +5251,75 @@
                       </div>
                     );
                   })()}
+                  {/* PANEL DE LIQUIDACIÓN GLOBAL DEL NEGOCIO (WA + PDF) */}
+                  {(db.deudasCobrar || []).length > 0 && (() => {
+                    const idsSel = obtenerIdsSeleccionadosLiqGlobal();
+                    const cuentasSel = (db.deudasCobrar || []).filter(d => idsSel.includes(d.id));
+                    const totGlobal = cuentasSel.reduce((acc, d) => {
+                      const dg = calcularDesgloseGananciaDeuda(d);
+                      acc.totUSD += dg.totalUSD;
+                      acc.repUSD += dg.repuestosUSD;
+                      acc.ganUSD += dg.gananciaUSD;
+                      return acc;
+                    }, { totUSD: 0, repUSD: 0, ganUSD: 0 });
+
+                    return (
+                      <div className="bg-slate-900 border border-purple-500/40 rounded-2xl p-4 space-y-3 shadow-lg">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5">
+                          <div>
+                            <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                              <i className="fa-solid fa-file-invoice-dollar text-purple-400"></i> Liquidación Global del Negocio ({cuentasSel.length} cuentas)
+                            </h3>
+                            <p className="text-[11px] text-slate-400">
+                              Total seleccionado: <strong className="text-emerald-400 font-mono">{formatDinero(convertirParaMostrar(totGlobal.totUSD, 'USD'))}</strong>
+                              {totGlobal.repUSD > 0.01 && (
+                                <span className="ml-2 text-[10px] font-mono">
+                                  (💰 Gna: <strong className="text-cyan-300">{formatDinero(convertirParaMostrar(totGlobal.ganUSD, 'USD'))}</strong> • 📦 Rep: <strong className="text-amber-300">{formatDinero(convertirParaMostrar(totGlobal.repUSD, 'USD'))}</strong>)
+                                </span>
+                              )}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1.5 w-full sm:w-auto">
+                            <button type="button" onClick={() => setMostrarPanelLiqGlobal(!mostrarPanelLiqGlobal)} className="bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-bold transition">
+                              <i className={`fa-solid ${mostrarPanelLiqGlobal ? 'fa-chevron-up' : 'fa-sliders'} mr-1`}></i>Elegir cuentas
+                            </button>
+                            <button type="button" onClick={() => copiarLiquidacionGlobal(cuentasSel)} disabled={cuentasSel.length === 0} className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-xl text-xs font-black border transition disabled:opacity-40 ${copiadoId === 'liq_global' ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-500/40'}`}>
+                              <i className={`fa-solid ${copiadoId === 'liq_global' ? 'fa-check' : 'fa-copy'} mr-1.5`}></i>
+                              {copiadoId === 'liq_global' ? '¡Global Copiada!' : 'Copiar Global (WA)'}
+                            </button>
+                            <button type="button" onClick={() => descargarPDFLiquidacion(cuentasSel, 'Liquidacion_Global_Negocio')} disabled={cuentasSel.length === 0} className="flex-1 sm:flex-initial bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white font-black px-3 py-1.5 rounded-xl text-xs transition shadow-md">
+                              <i className="fa-solid fa-file-pdf text-rose-200 mr-1.5"></i>Descargar PDF Global
+                            </button>
+                          </div>
+                        </div>
+
+                        {mostrarPanelLiqGlobal && (
+                          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2 fade-in">
+                            <div className="flex justify-between items-center text-[10px]">
+                              <span className="text-slate-400 font-bold uppercase">Tildá las cuentas a incluir en la liquidación global:</span>
+                              <div className="flex gap-2">
+                                <button type="button" onClick={() => setCuentasLiqGlobal(null)} className="text-purple-400 hover:underline font-bold">Solo Negocio</button>
+                                <button type="button" onClick={() => setCuentasLiqGlobal((db.deudasCobrar || []).map(d => d.id))} className="text-cyan-400 hover:underline font-bold">Todas</button>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {(db.deudasCobrar || []).map(d => {
+                                const activa = idsSel.includes(d.id);
+                                return (
+                                  <button key={d.id} type="button" onClick={() => toggleCuentaLiqGlobal(d.id)} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 ${activa ? 'bg-purple-950/70 border-purple-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>
+                                    <i className={`fa-solid ${activa ? 'fa-square-check text-purple-400' : 'fa-regular fa-square'}`}></i>
+                                    <span>{d.deudor}</span>
+                                    <span className="font-mono text-[10px] text-emerald-400">({formatDinero(convertirParaMostrar(d.monto, d.moneda, monedaVisual), monedaVisual)})</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-lg">
                     <div className="border-b border-slate-800 pb-2.5">
                       <h3 className="text-sm font-bold text-white">Prestar Plata Manualmente</h3>
@@ -5043,6 +5476,9 @@
                                 <button type="button" onClick={() => copiarLiquidacionCobrar(item)} className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition ${copiadoId === `liq_${item.id}` ? 'bg-emerald-600 text-white border-emerald-400' : 'bg-slate-900 hover:bg-slate-800 text-emerald-400 border-emerald-500/30'}`} title="Copiar detalle de liquidación para WhatsApp">
                                   <i className={`fa-solid ${copiadoId === `liq_${item.id}` ? 'fa-check' : 'fa-file-invoice-dollar'} mr-1.5`}></i>
                                   {copiadoId === `liq_${item.id}` ? '¡Copiado!' : 'Liquidación'}
+                                </button>
+                                <button type="button" onClick={() => descargarPDFLiquidacion([item], item.deudor)} className="px-2.5 py-1 rounded-lg text-xs font-bold border transition bg-purple-950 hover:bg-purple-800 text-purple-200 border-purple-500/50" title="Descargar Liquidación en PDF">
+                                  <i className="fa-solid fa-file-pdf text-rose-400 mr-1"></i>PDF
                                 </button>
                               </div>
                               <button onClick={() => setCobroDeudaActivo({ idDeuda: item.id, destinoTipo: 'billetera', walletId: '', deudaProveedorId: '', imputacion: 'proporcional', montoCobro: '', monedaCobro: item.moneda || monedaVisual })} className="bg-indigo-950 hover:bg-indigo-900 text-indigo-400 border border-indigo-800 px-3 py-1.5 rounded-lg text-xs font-bold transition">Cobrar / Abonar</button>
@@ -6435,7 +6871,7 @@
                 </div>
               )}
 
-              {/* VISTA NUEVA: CALCULADORA DE CUOTAS POSNET (INDIVIDUAL Y MULTI-EQUIPO) */}
+              {/* VISTA NUEVA: CALCULADORA DE CUOTAS POSNET (NORMAL, INVERSA Y MULTI-EQUIPO) */}
               {vista === 'cuotas' && (() => {
                 const montoNum = parseFloat(calcCuotas.monto) || 0;
                 const extraNum = parseFloat(calcCuotas.extraDolar) || 0;
@@ -6444,6 +6880,17 @@
                 const pasoRedondeo = parseInt(calcCuotas.redondeo) || 1;
                 const itemsMulti = calcCuotas.items || [];
                 const enModoMulti = itemsMulti.length > 0;
+
+                // Cálculo inverso: de valor de cuota + plan → base Posnet ARS → equivalente USD contado
+                const planInvObj = (calcCuotas.planes || []).find(p => String(p.cuotas) === String(calcCuotas.cuotaInversaPlan)) || (calcCuotas.planes || [])[1] || { cuotas: 6, recargo: 33 };
+                const cuotaInvNum = parseFloat(calcCuotas.cuotaInversaMonto) || 0;
+                const totalInvARS = cuotaInvNum * (parseInt(planInvObj.cuotas) || 6);
+                const recInv = parseFloat(planInvObj.recargo) || 0;
+                const basePosnetInvARS = totalInvARS / (1 + (recInv / 100));
+                const montoInvUSD = dolarPosnet > 0 ? (basePosnetInvARS / dolarPosnet) : 0;
+
+                const montoActivoNum = calcCuotas.modoInverso ? montoInvUSD : montoNum;
+                const monedaActiva = calcCuotas.modoInverso ? 'USD' : calcCuotas.moneda;
 
                 const calcularBloqueCuotas = (valMonto, valMoneda) => {
                   const mNum = parseFloat(valMonto) || 0;
@@ -6462,10 +6909,11 @@
                 };
 
                 const agregarEquipoAListaCuotas = () => {
-                  if (montoNum <= 0) return alert('Ingresá un precio base mayor a 0 para sumarlo a la lista.');
+                  if (montoActivoNum <= 0) return alert('Ingresá un precio o valor de cuota mayor a 0 para sumarlo a la lista.');
                   const nombreLim = calcCuotas.concepto.trim() || `Equipo #${itemsMulti.length + 1}`;
-                  const nuevoItem = { id: Date.now() + Math.random(), concepto: nombreLim, monto: montoNum, moneda: calcCuotas.moneda };
-                  setCalcCuotas({ ...calcCuotas, items: [...itemsMulti, nuevoItem], concepto: '', monto: '' });
+                  const valorGuardar = monedaActiva === 'USD' ? redondear(montoActivoNum) : Math.round(montoActivoNum);
+                  const nuevoItem = { id: Date.now() + Math.random(), concepto: nombreLim, monto: valorGuardar, moneda: monedaActiva };
+                  setCalcCuotas({ ...calcCuotas, items: [...itemsMulti, nuevoItem], concepto: '', monto: '', cuotaInversaMonto: '' });
                 };
 
                 const quitarEquipoDeListaCuotas = (idItem) => {
@@ -6577,25 +7025,24 @@
                   setCalcCuotas({ ...calcCuotas, planes: copia });
                 };
 
-                // Cálculos activos: individual, multi por separado o multi en combo
-                const calcIndividual = calcularBloqueCuotas(montoNum, calcCuotas.moneda);
+                const calcIndividual = calcularBloqueCuotas(montoActivoNum, monedaActiva);
                 const itemsCalculados = itemsMulti.map(it => ({ ...it, calc: calcularBloqueCuotas(it.monto, it.moneda) }));
                 const totalComboUSD = itemsCalculados.reduce((acc, it) => acc + it.calc.montoEquivUSD, 0);
                 const calcCombo = calcularBloqueCuotas(totalComboUSD, 'USD');
 
                 const planesVisiblesTarjetas = !enModoMulti
                   ? calcIndividual.planes
-                  : (calcCuotas.modoMulti === 'combo' ? calcCombo.planes : (montoNum > 0 ? calcIndividual.planes : calcCombo.planes));
+                  : (calcCuotas.modoMulti === 'combo' ? calcCombo.planes : (montoActivoNum > 0 ? calcIndividual.planes : calcCombo.planes));
 
                 const armarTextoWhatsapp = () => {
                   const lineas = [];
 
                   if (!enModoMulti) {
-                    if (montoNum <= 0) return '';
+                    if (montoActivoNum <= 0) return '';
                     if (calcCuotas.concepto.trim()) lineas.push(`📱 *${calcCuotas.concepto.trim()}*`);
                     if (calcCuotas.incluirContado) {
-                      if (calcCuotas.moneda === 'USD') {
-                        lineas.push(`💵 Efectivo / Transferencia: *U$D ${montoNum.toLocaleString('es-AR')}* ($${calcIndividual.baseContadoARS.toLocaleString('es-AR')})`);
+                      if (monedaActiva === 'USD') {
+                        lineas.push(`💵 Efectivo / Transferencia: *U$D ${redondear(montoActivoNum).toLocaleString('es-AR')}* ($${calcIndividual.baseContadoARS.toLocaleString('es-AR')})`);
                       } else {
                         lineas.push(`💵 Efectivo / Transferencia: *$${calcIndividual.baseContadoARS.toLocaleString('es-AR')}*`);
                       }
@@ -6627,7 +7074,6 @@
                     return lineas.join('\n');
                   }
 
-                  // Modo Multi: Por separado (comparar varios equipos en 1 solo mensaje)
                   itemsCalculados.forEach((it, idxIt) => {
                     if (idxIt > 0) lineas.push('');
                     lineas.push(`📱 *${it.concepto}*`);
@@ -6662,12 +7108,16 @@
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-3">
                         <div>
                           <h3 className="text-sm font-black text-white flex items-center gap-2">
-                            <i className="fa-solid fa-credit-card text-indigo-400"></i> Simulador de Cuotas Posnet (1 o Varios Equipos)
+                            <i className="fa-solid fa-credit-card text-indigo-400"></i> Simulador de Cuotas Posnet (Normal, Inversa y Multi-Equipo)
                           </h3>
-                          <p className="text-[11px] text-slate-400">Cotizá al instante, sumá uno por uno o pegá una lista entera para calcular todo junto.</p>
+                          <p className="text-[11px] text-slate-400">Calculá cuotas desde el precio, o usá <strong>Inversa</strong> para partir del valor de una cuota.</p>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <button type="button" onClick={() => setCalcCuotas({...calcCuotas, mostrarMasivo: !calcCuotas.mostrarMasivo})} className={`px-3 py-2 rounded-xl text-xs font-black border transition flex items-center gap-1.5 ${calcCuotas.mostrarMasivo ? 'bg-indigo-600 text-white border-indigo-400 shadow-md' : 'bg-slate-950 text-indigo-300 border-indigo-500/50 hover:bg-slate-800'}`}>
+                          <button type="button" onClick={() => setCalcCuotas({...calcCuotas, modoInverso: !calcCuotas.modoInverso, mostrarMasivo: false})} className={`px-3 py-2 rounded-xl text-xs font-black border transition flex items-center gap-1.5 ${calcCuotas.modoInverso ? 'bg-amber-600 text-white border-amber-400 shadow-md' : 'bg-slate-950 text-amber-300 border-amber-500/50 hover:bg-slate-800'}`}>
+                            <i className="fa-solid fa-repeat"></i>
+                            {calcCuotas.modoInverso ? 'Volver a Precio Base' : '🔄 Inversa (Por Cuota)'}
+                          </button>
+                          <button type="button" onClick={() => setCalcCuotas({...calcCuotas, mostrarMasivo: !calcCuotas.mostrarMasivo, modoInverso: false})} className={`px-3 py-2 rounded-xl text-xs font-black border transition flex items-center gap-1.5 ${calcCuotas.mostrarMasivo ? 'bg-indigo-600 text-white border-indigo-400 shadow-md' : 'bg-slate-950 text-indigo-300 border-indigo-500/50 hover:bg-slate-800'}`}>
                             <i className={`fa-solid ${calcCuotas.mostrarMasivo ? 'fa-chevron-up' : 'fa-wand-magic-sparkles'}`}></i>
                             {calcCuotas.mostrarMasivo ? 'Ocultar Pegado' : '📋 Pegar Lista Masiva'}
                           </button>
@@ -6715,51 +7165,91 @@
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-                        <div className="sm:col-span-4">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Equipo o Reparación</label>
-                          <input type="text" placeholder="Ej: iPhone 15 Pro 256GB / Bat. 13 Pro" value={calcCuotas.concepto} onChange={e => setCalcCuotas({...calcCuotas, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-indigo-500" />
-                        </div>
+                      {/* ENTRADA DE DATOS: MODO NORMAL vs MODO INVERSO (DESDE VALOR DE CUOTA) */}
+                      {!calcCuotas.modoInverso ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                          <div className="sm:col-span-4">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Equipo o Reparación</label>
+                            <input type="text" placeholder="Ej: iPhone 15 Pro 256GB / Bat. 13 Pro" value={calcCuotas.concepto} onChange={e => setCalcCuotas({...calcCuotas, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-indigo-500" />
+                          </div>
 
-                        <div className="sm:col-span-3">
-                          <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Precio Base</label>
-                          <div className="flex">
-                            <input type="number" step="any" placeholder="Ej: 650 o 110000" value={calcCuotas.monto} onChange={e => setCalcCuotas({...calcCuotas, monto: e.target.value})} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregarEquipoAListaCuotas(); } }} className="w-full min-w-0 bg-slate-950 border border-indigo-500/60 rounded-l-xl px-3 py-2 text-white font-mono font-black text-sm focus:outline-none" />
-                            <select value={calcCuotas.moneda} onChange={e => setCalcCuotas({...calcCuotas, moneda: e.target.value})} className="bg-slate-950 border border-indigo-500/60 border-l-0 rounded-r-xl px-2.5 py-2 text-white text-xs font-black">
-                              <option value="USD">USD</option>
-                              <option value="ARS">ARS</option>
-                            </select>
+                          <div className="sm:col-span-3">
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Precio Base</label>
+                            <div className="flex">
+                              <input type="number" step="any" placeholder="Ej: 650 o 110000" value={calcCuotas.monto} onChange={e => setCalcCuotas({...calcCuotas, monto: e.target.value})} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregarEquipoAListaCuotas(); } }} className="w-full min-w-0 bg-slate-950 border border-indigo-500/60 rounded-l-xl px-3 py-2 text-white font-mono font-black text-sm focus:outline-none" />
+                              <select value={calcCuotas.moneda} onChange={e => setCalcCuotas({...calcCuotas, moneda: e.target.value})} className="bg-slate-950 border border-indigo-500/60 border-l-0 rounded-r-xl px-2.5 py-2 text-white text-xs font-black">
+                                <option value="USD">USD</option>
+                                <option value="ARS">ARS</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">Extra Dólar ($)</label>
+                            <input type="number" step="10" value={calcCuotas.extraDolar} onChange={e => setCalcCuotas({...calcCuotas, extraDolar: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-amber-400 font-mono font-bold text-xs text-center" />
+                          </div>
+
+                          <div className="sm:col-span-3 flex gap-1.5">
+                            <div className="w-24 shrink-0">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Redondeo</label>
+                              <select value={calcCuotas.redondeo} onChange={e => setCalcCuotas({...calcCuotas, redondeo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-white font-mono text-xs h-[36px]">
+                                <option value="1">$1</option>
+                                <option value="100">$100</option>
+                                <option value="500">$500</option>
+                                <option value="1000">$1.000</option>
+                              </select>
+                            </div>
+                            <button type="button" onClick={agregarEquipoAListaCuotas} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black px-2.5 py-2 rounded-xl text-xs transition h-[36px] self-end shadow-md whitespace-nowrap" title="Sumar este equipo para cotizar varios juntos">
+                              <i className="fa-solid fa-plus mr-1"></i>Lista
+                            </button>
                           </div>
                         </div>
-
-                        <div className="sm:col-span-2">
-                          <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">Extra Dólar ($)</label>
-                          <input type="number" step="10" value={calcCuotas.extraDolar} onChange={e => setCalcCuotas({...calcCuotas, extraDolar: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-amber-400 font-mono font-bold text-xs text-center" />
-                        </div>
-
-                        <div className="sm:col-span-3 flex gap-1.5">
-                          <div className="w-24 shrink-0">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Redondeo</label>
-                            <select value={calcCuotas.redondeo} onChange={e => setCalcCuotas({...calcCuotas, redondeo: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-white font-mono text-xs h-[36px]">
-                              <option value="1">$1</option>
-                              <option value="100">$100</option>
-                              <option value="500">$500</option>
-                              <option value="1000">$1.000</option>
-                            </select>
+                      ) : (
+                        <div className="bg-amber-950/20 border-2 border-amber-500/50 rounded-xl p-3.5 space-y-3 fade-in">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-black text-amber-300 uppercase tracking-wider">
+                              <i className="fa-solid fa-repeat mr-1.5"></i>Modo Inverso: Ingresá el valor de cuota para sacar el monto en USD y el resto de los planes
+                            </span>
                           </div>
-                          <button type="button" onClick={agregarEquipoAListaCuotas} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black px-2.5 py-2 rounded-xl text-xs transition h-[36px] self-end shadow-md whitespace-nowrap" title="Sumar este equipo para cotizar varios juntos">
-                            <i className="fa-solid fa-plus mr-1"></i>Lista
-                          </button>
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                            <div className="sm:col-span-3">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Equipo (Opcional)</label>
+                              <input type="text" placeholder="Ej: iPhone 15 Pro" value={calcCuotas.concepto} onChange={e => setCalcCuotas({...calcCuotas, concepto: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs" />
+                            </div>
+                            <div className="sm:col-span-3">
+                              <label className="text-[10px] font-bold text-amber-400 uppercase block mb-1">Plan elegido</label>
+                              <select value={calcCuotas.cuotaInversaPlan || '6'} onChange={e => setCalcCuotas({...calcCuotas, cuotaInversaPlan: e.target.value})} className="w-full bg-slate-950 border border-amber-500/60 rounded-xl px-3 py-2 text-white text-xs font-black">
+                                {(calcCuotas.planes || []).map(p => (
+                                  <option key={p.cuotas} value={p.cuotas}>{p.cuotas} cuotas (+{p.recargo}%)</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="sm:col-span-3">
+                              <label className="text-[10px] font-bold text-emerald-400 uppercase block mb-1">Valor de cada cuota (ARS)</label>
+                              <input type="number" step="any" autoFocus placeholder="Ej: 100000" value={calcCuotas.cuotaInversaMonto || ''} onChange={e => setCalcCuotas({...calcCuotas, cuotaInversaMonto: e.target.value})} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregarEquipoAListaCuotas(); } }} className="w-full bg-slate-950 border border-emerald-500/60 rounded-xl px-3 py-2 text-emerald-400 font-mono font-black text-sm focus:outline-none" />
+                            </div>
+                            <div className="sm:col-span-3 flex gap-1.5">
+                              <div className="w-20 shrink-0">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Extra $</label>
+                                <input type="number" step="10" value={calcCuotas.extraDolar} onChange={e => setCalcCuotas({...calcCuotas, extraDolar: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-amber-400 font-mono font-bold text-xs text-center h-[36px]" />
+                              </div>
+                              <button type="button" onClick={agregarEquipoAListaCuotas} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black px-2.5 py-2 rounded-xl text-xs transition h-[36px] self-end shadow-md whitespace-nowrap">
+                                <i className="fa-solid fa-plus mr-1"></i>Lista
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      )}
 
-                      {/* RESUMEN DE BASE DE CÁLCULO (MODO INDIVIDUAL) */}
-                      {!enModoMulti && montoNum > 0 && (
+                      {/* RESUMEN DE BASE DE CÁLCULO (MODO NORMAL O INVERSO) */}
+                      {!enModoMulti && montoActivoNum > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex justify-between items-center text-xs">
-                            <span className="text-slate-400 font-bold">Precio Contado (Dólar ${dolarContado}):</span>
+                          <div className={`rounded-xl p-3 flex justify-between items-center text-xs border ${calcCuotas.modoInverso ? 'bg-emerald-950/40 border-emerald-500/60' : 'bg-slate-950 border-slate-800'}`}>
+                            <span className="text-slate-300 font-bold">
+                              {calcCuotas.modoInverso ? `Equivalente Contado (Dólar $${dolarContado}):` : `Precio Contado (Dólar $${dolarContado}):`}
+                            </span>
                             <span className="font-mono font-black text-emerald-400 text-sm">
-                              {calcCuotas.moneda === 'USD' ? `U$D ${montoNum.toLocaleString('es-AR')} • ` : ''}$ {calcIndividual.baseContadoARS.toLocaleString('es-AR')} ARS
+                              {monedaActiva === 'USD' ? `U$D ${redondear(montoActivoNum).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} • ` : ''}$ {calcIndividual.baseContadoARS.toLocaleString('es-AR')} ARS
                             </span>
                           </div>
                           <div className="bg-indigo-950/30 border border-indigo-500/40 rounded-xl p-3 flex justify-between items-center text-xs">
@@ -6828,10 +7318,10 @@
                       )}
                     </div>
 
-                    {/* GRILLA DE PLANES DE CUOTAS (PERMITE ACTIVAR/DESACTIVAR Y EDITAR % EN AMBOS MODOS) */}
+                    {/* GRILLA DE PLANES DE CUOTAS */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {planesVisiblesTarjetas.map(p => (
-                        <div key={p.cuotas} className={`rounded-2xl p-4 border transition flex flex-col justify-between gap-3 shadow-lg ${p.activo ? 'bg-slate-900 border-indigo-500/40' : 'bg-slate-950/60 border-slate-800 opacity-50'}`}>
+                        <div key={p.cuotas} className={`rounded-2xl p-4 border transition flex flex-col justify-between gap-3 shadow-lg ${p.activo ? (calcCuotas.modoInverso && String(p.cuotas) === String(planInvObj.cuotas) ? 'bg-slate-900 border-amber-400 ring-1 ring-amber-400/40' : 'bg-slate-900 border-indigo-500/40') : 'bg-slate-950/60 border-slate-800 opacity-50'}`}>
                           <div className="flex justify-between items-center">
                             <button type="button" onClick={() => togglePlanCuota(p.idx)} className="flex items-center gap-2 text-left">
                               <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] border ${p.activo ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-slate-900 border-slate-700 text-slate-500'}`}>
@@ -6849,7 +7339,7 @@
 
                           <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-center">
                             <span className="text-[10px] font-bold text-slate-400 uppercase block">
-                              {enModoMulti && calcCuotas.modoMulti === 'combo' ? 'Cuota Fija (Combo Total)' : (enModoMulti && montoNum <= 0 ? 'Ref. Suma Total' : 'Cuota Fija Mensual')}
+                              {enModoMulti && calcCuotas.modoMulti === 'combo' ? 'Cuota Fija (Combo Total)' : (enModoMulti && montoActivoNum <= 0 ? 'Ref. Suma Total' : 'Cuota Fija Mensual')}
                             </span>
                             <span className="font-mono font-black text-emerald-400 text-xl block mt-0.5">
                               $ {p.valorCuota.toLocaleString('es-AR')}
@@ -6888,12 +7378,13 @@
                       </div>
 
                       <pre className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs text-slate-200 font-sans whitespace-pre-wrap leading-relaxed min-h-[90px]">
-                        {textoFinalWA || 'Ingresá un precio arriba (o tocá "+ Lista" para cargar varios equipos) y vas a ver el mensaje listo para WhatsApp.'}
+                        {textoFinalWA || 'Ingresá un precio, una cuota en modo inverso o pegá una lista para ver el mensaje listo para WhatsApp.'}
                       </pre>
                     </div>
                   </div>
                 );
               })()}
+  
               {/* VISTA 9: AUDITORÍA */}
               {vista === 'actividad' && (
                 <div className="max-w-5xl mx-auto space-y-5 fade-in">
@@ -6973,6 +7464,58 @@
               </div>
             </div>
           )}
+
+          {liquidandoActivo && (() => {
+            const decUSD = aUSDBase(liquidandoActivo.monto, liquidandoActivo.moneda, db.cotizacionDolar);
+            const realNum = parseFloat(liquidandoActivo.montoReal) || 0;
+            const realUSD = aUSDBase(realNum, liquidandoActivo.monedaReal || 'USD', db.cotizacionDolar);
+            const diffUSD = redondear(realUSD - decUSD);
+            return (
+              <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
+                <form onSubmit={procesarLiquidacionActivo} className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+                  <div className="border-b border-slate-800 pb-2.5">
+                    <h3 className="font-black text-white text-base"><i className="fa-solid fa-money-bill-transfer text-emerald-400 mr-2"></i>Liquidar Activo a Líquido</h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Activo: <strong className="text-white">{liquidandoActivo.nombre}</strong> (Declarado: {liquidandoActivo.monto} {liquidandoActivo.moneda})</p>
+                  </div>
+
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <label className="text-emerald-400 font-bold mb-1 block">Monto real al que lo liquidaste</label>
+                      <div className="flex gap-2">
+                        <input type="number" step="any" required autoFocus placeholder="Monto real" value={liquidandoActivo.montoReal} onChange={e => setLiquidandoActivo({...liquidandoActivo, montoReal: e.target.value})} className="flex-1 min-w-0 bg-slate-950 border border-emerald-500/50 rounded-xl px-3 py-2 text-white font-mono font-black text-sm focus:outline-none" />
+                        <select value={liquidandoActivo.monedaReal} onChange={e => setLiquidandoActivo({...liquidandoActivo, monedaReal: e.target.value})} className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 text-white font-bold">
+                          <option value="USD">USD</option>
+                          <option value="ARS">ARS</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {realNum > 0 && (
+                      <div className={`rounded-xl p-2.5 border text-[11px] flex justify-between items-center ${diffUSD >= 0 ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' : 'bg-amber-950/40 border-amber-500/40 text-amber-300'}`}>
+                        <span>Diferencia vs. valor declarado:</span>
+                        <strong className="font-mono">
+                          {diffUSD === 0 ? 'Exacto ($0)' : `${diffUSD > 0 ? '+' : '-'}U$D ${Math.abs(diffUSD)}`}
+                        </strong>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="text-slate-300 font-bold mb-1 block">¿A qué billetera ingresa el dinero?</label>
+                      <select required value={liquidandoActivo.walletDestinoId} onChange={e => setLiquidandoActivo({...liquidandoActivo, walletDestinoId: e.target.value})} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold">
+                        <option value="">-- Elegí billetera destino --</option>
+                        {billeterasDisponibles.map(w => <option key={w.id} value={w.id}>💳 {w.nombre} ({w.monto} {w.moneda})</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black py-2.5 rounded-xl transition text-xs shadow-md">Confirmar Liquidación</button>
+                    <button type="button" onClick={() => setLiquidandoActivo(null)} className="bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl transition text-xs">Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            );
+          })()}
 
           {editandoActivo && (
             <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
