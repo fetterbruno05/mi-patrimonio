@@ -526,7 +526,7 @@
               actividad: [logRestauracion, ...(Array.isArray(d.actividad) ? d.actividad.filter(Boolean) : [])].slice(0, 500)
           };
 
-          await guardarEnNube(estadoRestaurado);
+          await guardarEnNube(estadoRestaurado, true);
           setBackupParaRestaurar(null);
           alert('✅ Backup restaurado correctamente en la nube.');
       };
